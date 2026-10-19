@@ -915,6 +915,30 @@ async function settleTrackingRun({
   }
 }
 
+function trackingWorkspaceFiles(ctx, target) {
+  const targetPath = target?.relPath || "";
+  const files = [];
+  for (const material of ctx.store.listMaterials()) {
+    const relPath = material?.relPath;
+    if (!relPath || relPath === targetPath) continue;
+    if (relPath.startsWith(".tracking/") || relPath.includes("/backups/")) continue;
+    const version = material.versions?.[0];
+    files.push({
+      path: relPath,
+      name: material.name,
+      kind: material.kind === "output" ? "output" : "input",
+      version: version?.v ?? 1,
+      size: version?.size ?? null,
+      updatedAt: version?.createdAt || material.updatedAt || "",
+    });
+  }
+  files.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "input" ? -1 : 1;
+    return String(b.updatedAt).localeCompare(String(a.updatedAt));
+  });
+  return files.slice(0, 80);
+}
+
 async function runTracking(ctx, trackingId, { trigger = "manual", scheduledFor = null } = {}) {
   const store = ctx.store;
   if (activeTrackingRuns.has(trackingId)) {
@@ -978,6 +1002,7 @@ async function runTracking(ctx, trackingId, { trigger = "manual", scheduledFor =
     resultRelPath: resultRel,
     backupRelPath: backupRel,
     trigger,
+    workspaceFiles: trackingWorkspaceFiles(ctx, target),
   });
 
   let settled = false;
