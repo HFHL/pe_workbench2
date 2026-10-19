@@ -3049,7 +3049,7 @@ function renderAttachments() {
       ${icon(kindOf(f.name).icon, 13)}
       <span class="chip-name">${esc(f.name)}</span>
       ${status}
-      <button type="button" class="chip-x" data-remove="${esc(f.id)}" aria-label="移除 ${esc(f.name)}">${icon('x', 13)}</button>
+      ${state.uploading ? '' : `<button type="button" class="chip-x" data-remove="${esc(f.id)}" aria-label="移除 ${esc(f.name)}">${icon('x', 13)}</button>`}
       <span class="chip-bar" style="width:${f.status === 'uploading' ? pct : 0}%"></span>
     </span>`;
   }).join('');
@@ -3751,7 +3751,7 @@ async function init() {
   });
   attachmentsEl.addEventListener('click', e => {
     const btn = e.target.closest('[data-remove]');
-    if (!btn) return;
+    if (!btn || state.uploading) return;
     const id = btn.dataset.remove;
     state.pending = state.pending.filter(f => f.id !== id);
     renderAttachments();
