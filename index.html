@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workbench — Product Eng</title>
+<meta name="color-scheme" content="light">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23141414'/%3E%3Cpath d='M7 9l5 3 5-3M7 13.5l5 3 5-3' stroke='%23fff' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="tracking.css">
+<link rel="stylesheet" href="suggestions.css">
+</head>
+<body>
+<div class="desk">
+  <div class="window" id="window">
+    <header class="titlebar">
+      <div class="lights" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="titlebar-title"><span id="docTitle">定价页重构</span><span class="sep">·</span><span id="docSpace">Product Eng</span></div>
+      <div class="titlebar-right"></div>
+    </header>
+
+    <div class="app">
+      <aside class="sidebar" id="sidebar" aria-label="项目与会话">
+        <div class="ws-wrap">
+          <button class="workspace" id="workspaceBtn" aria-haspopup="menu" aria-expanded="false">
+            <span class="ws-mark"><svg class="i" width="15" height="15"><use href="#i-layers"/></svg></span>
+            <span class="ws-text"><span class="ws-name" id="wsName">Product Eng</span><span class="ws-sub" id="wsSub">个人项目</span></span>
+            <svg class="i ws-chev" width="14" height="14"><use href="#i-chevron-down"/></svg>
+          </button>
+          <div class="menu ws-menu" id="wsMenu" role="menu" aria-label="切换项目" hidden>
+            <div class="ws-menu-label">切换项目</div>
+            <div class="ws-menu-list" id="projectMenuList"></div>
+            <div class="menu-sep" aria-hidden="true"></div>
+            <button class="menu-item ws-new" id="newProjectBtn">
+              <span class="ws-new-icon"><svg class="i" width="13" height="13"><use href="#i-plus"/></svg></span>
+              新建项目
+            </button>
+          </div>
+        </div>
+
+        <div class="side-head">
+          <span>会话</span>
+          <button class="icon-btn" id="newSession" aria-label="新建会话"><svg class="i" width="15" height="15"><use href="#i-plus"/></svg></button>
+        </div>
+
+        <nav class="sessions" id="sessionList" aria-label="会话列表"></nav>
+
+        <footer class="side-foot">
+          <span class="avatar" aria-hidden="true">林</span>
+          <span class="user-meta"><span class="user-name">林默</span><span class="user-plan">Pro 计划</span></span>
+          <button class="icon-btn" aria-label="账户设置"><svg class="i" width="16" height="16"><use href="#i-more"/></svg></button>
+        </footer>
+      </aside>
+
+      <main class="chat">
+        <header class="chat-head">
+          <button class="icon-btn menu-btn" id="sideToggle" aria-label="打开会话列表"><svg class="i" width="17" height="17"><use href="#i-menu"/></svg></button>
+          <h1 class="chat-title" id="chatTitle">定价页重构</h1>
+          <div class="ch-actions">
+            <div class="pop-wrap">
+              <button class="model-chip" id="modelBtn" aria-haspopup="menu" aria-expanded="false">
+                <span class="dot" aria-hidden="true"></span>
+                <span id="modelName">deepseek-v4-pro</span>
+                <svg class="i" width="13" height="13"><use href="#i-chevron-down"/></svg>
+              </button>
+              <div class="menu model-menu" id="modelMenu" hidden>
+                <button class="menu-item is-on" data-model="deepseek-v4-pro">deepseek-v4-pro<span class="menu-note">推理</span></button>
+                <button class="menu-item" data-model="deepseek-flash">deepseek-flash<span class="menu-note">快速</span></button>
+              </div>
+            </div>
+            <button class="icon-btn" id="filesToggle" aria-label="资料面板" aria-expanded="true" aria-controls="filesPanel">
+              <svg class="i" width="16" height="16"><use href="#i-panel"/></svg>
+            </button>
+          </div>
+        </header>
+
+        <div class="thread" id="thread"></div>
+
+        <div class="composer-wrap" id="dropZone">
+          <div class="next-actions" id="nextActions" hidden></div>
+          <form class="composer" id="composer">
+            <div class="attachments" id="attachments"></div>
+            <textarea id="input" rows="1" placeholder="输入消息，或拖入文件" aria-label="消息内容"></textarea>
+            <div class="composer-bar">
+              <div class="composer-left">
+                <button type="button" class="attach" id="attachBtn"><svg class="i" width="15" height="15"><use href="#i-paperclip"/></svg>添加资料</button>
+                <input type="file" id="fileInput" multiple hidden>
+              </div>
+              <div class="composer-right">
+                <kbd>⏎ 发送</kbd>
+                <button type="button" class="send stop" id="stopBtn" aria-label="停止" hidden><svg class="i" width="14" height="14"><use href="#i-stop"/></svg></button>
+                <button type="submit" class="send" id="sendBtn" aria-label="发送" disabled><svg class="i" width="16" height="16"><use href="#i-arrow-up"/></svg></button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </main>
+
+      <aside class="files" id="filesPanel" aria-label="资料与计划">
+        <header class="rp-head">
+          <div class="rp-title"><span id="panelTitle">资料</span><span class="rp-count" id="fileCount">0</span></div>
+          <div class="rp-head-actions">
+            <button class="icon-btn" id="newTrackBtn" aria-label="新建跟踪" title="新建跟踪" hidden><svg class="i" width="15" height="15"><use href="#i-plus"/></svg></button>
+            <button class="icon-btn" id="filesClose" aria-label="收起资料面板"><svg class="i" width="16" height="16"><use href="#i-chevron-right"/></svg></button>
+          </div>
+        </header>
+        <div class="rp-filters" id="fileFilters" role="tablist" aria-label="资料分类">
+          <button class="filter is-active" data-filter="all" role="tab" aria-selected="true">全部</button>
+          <button class="filter" data-filter="input" role="tab" aria-selected="false">输入</button>
+          <button class="filter" data-filter="output" role="tab" aria-selected="false">产出</button>
+          <button class="filter" data-filter="tracking" role="tab" aria-selected="false">跟踪</button>
+          <button class="filter" data-filter="tasks" role="tab" aria-selected="false">计划</button>
+        </div>
+        <div class="rp-hint" id="fileHint" hidden>
+          <span class="hint-icon" aria-hidden="true"><svg class="i" width="13" height="13"><use href="#i-check-square"/></svg></span>
+          <span class="hint-text">勾选资料，引用到输入框</span>
+          <button type="button" class="hint-action" id="pickAllBtn">全选</button>
+        </div>
+        <div class="rp-list" id="fileList"></div>
+        <div class="rp-pickbar" id="filePickbar" hidden>
+          <span class="pickbar-count" aria-live="polite"><strong id="pickCount">0</strong> 份已选</span>
+          <button type="button" class="pickbar-clear" id="pickClear">清除</button>
+          <button type="button" class="btn primary small" id="pickReference">
+            <svg class="i" width="13" height="13" aria-hidden="true"><use href="#i-link"/></svg>
+            引用到输入框
+          </button>
+        </div>
+      </aside>
+    </div>
+
+    <div class="drawer-scrim" id="drawerScrim"></div>
+  </div>
+</div>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dName" id="dialog" tabindex="-1">
+    <div class="d-head">
+      <span class="file-icon" id="dIcon"></span>
+      <div class="d-head-text">
+        <h2 class="d-name" id="dName"></h2>
+        <p class="d-path" id="dPath"></p>
+      </div>
+      <button class="icon-btn" id="dClose" aria-label="关闭"><svg class="i" width="16" height="16"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="d-body">
+      <div class="d-preview-pane">
+        <div class="d-preview" id="dPreview"></div>
+      </div>
+      <div class="d-info-pane" id="dInfoPane">
+        <dl class="d-meta" id="dMeta"></dl>
+        <p class="d-desc" id="dDesc"></p>
+        <div class="lineage" id="dLineage" hidden></div>
+        <button class="track-strip" id="dTrack" hidden></button>
+        <div class="d-ver">
+          <div class="d-sec-head"><span id="dVerTitle">版本历史</span><span id="dVerCount"></span></div>
+          <div class="v-list" id="dVersions"></div>
+        </div>
+      </div>
+    </div>
+    <div class="d-foot">
+      <div class="d-foot-left">
+        <button class="btn" id="referenceFile">
+          <svg class="i" width="13" height="13" aria-hidden="true"><use href="#i-link"/></svg>
+          引用到输入框
+        </button>
+        <button class="btn" id="copyPath">复制路径</button>
+      </div>
+      <div class="d-foot-right">
+        <button class="btn" id="restoreVersion" hidden>恢复此版本</button>
+        <button class="btn danger" id="deleteFile">删除</button>
+        <button class="btn primary" id="downloadFile">下载</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="taskOverlay" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="tName" id="taskDialog" tabindex="-1">
+    <div class="d-head">
+      <span class="file-icon tint-yellow" id="tIcon"><svg class="i" width="18" height="18"><use href="#i-refresh"/></svg></span>
+      <div class="d-head-text">
+        <h2 class="d-name" id="tName"></h2>
+        <p class="d-path" id="tSchedule"></p>
+      </div>
+      <button class="icon-btn" id="tClose" aria-label="关闭"><svg class="i" width="16" height="16"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="d-scroll">
+      <dl class="d-meta" id="tMeta"></dl>
+      <p class="d-desc" id="tDesc"></p>
+      <div class="lineage" id="tLinks"></div>
+      <div class="d-ver">
+        <div class="d-sec-head"><span>运行记录</span><span id="tRunCount"></span></div>
+        <div class="run-list" id="tRuns"></div>
+      </div>
+    </div>
+    <div class="d-foot">
+      <button class="btn" id="taskToggle">暂停计划</button>
+      <div class="d-foot-right">
+        <button class="btn primary" id="taskRun">立即运行</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay track-overlay" id="trackOverlay" hidden></div>
+<div class="overlay track-overlay" id="trackSetupOverlay" hidden></div>
+<div class="overlay track-overlay" id="trackScheduleOverlay" hidden></div>
+
+<div class="overlay" id="projectOverlay" hidden>
+  <form class="dialog project-dialog" id="projectDialog" role="dialog" aria-modal="true" aria-labelledby="projectDialogTitle" tabindex="-1">
+    <div class="d-head">
+      <span class="file-icon tint-blue" id="projectIcon"><svg class="i" width="18" height="18"><use href="#i-layers"/></svg></span>
+      <div class="d-head-text">
+        <h2 class="d-name" id="projectDialogTitle">新建项目</h2>
+        <p class="d-path">每个项目有自己的资料、产出和会话。</p>
+      </div>
+      <button type="button" class="icon-btn" id="projectClose" aria-label="关闭"><svg class="i" width="16" height="16"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="project-fields">
+      <label class="field">
+        <span class="field-label">项目名称</span>
+        <input class="field-input" id="projectName" maxlength="40" placeholder="例如：竞品研究" autocomplete="off" required>
+      </label>
+      <label class="field">
+        <span class="field-label">备注 <span class="field-optional">可选</span></span>
+        <input class="field-input" id="projectNote" maxlength="60" placeholder="例如：团队 · 6 人" autocomplete="off">
+      </label>
+      <p class="field-hint">新项目会创建自己的 <code>exports/</code>、<code>uploads/</code>、<code>inputs/</code> 和会话目录。</p>
+    </div>
+    <div class="d-foot">
+      <span class="field-error" id="projectError" role="alert"></span>
+      <div class="d-foot-right">
+        <button type="button" class="btn" id="projectCancel">取消</button>
+        <button type="submit" class="btn primary" id="projectCreate">创建项目</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M6 9.5l6 6 6-6"/></symbol>
+  <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="M9.5 6l6 6-6 6"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+  <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="M20.5 11.5l-8.6 8.6a5.2 5.2 0 01-7.4-7.4l8.9-8.9a3.5 3.5 0 014.9 4.9l-8.9 8.9a1.7 1.7 0 01-2.5-2.5l8.6-8.6"/></symbol>
+  <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="7.5" ry="3"/><path d="M4.5 5.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6"/><path d="M4.5 11.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6"/></symbol>
+  <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/></symbol>
+  <symbol id="i-file-text" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></symbol>
+  <symbol id="i-file-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="M21 15.5L16 10.5 5 21"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M9 9v11M15 9v11"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="M9 7l-5 5 5 5M15 7l5 5-5 5"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 012-2h3.6l2 2.2h7.4a2 2 0 012 2v7.8a2 2 0 01-2 2h-13a2 2 0 01-2-2z"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v10M8 10.5l4 4 4-4M5 20h14"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9.5 7V5.2A1.2 1.2 0 0110.7 4h2.6a1.2 1.2 0 011.2 1.2V7M6.5 7l.9 12.1A1.6 1.6 0 009 20.7h6a1.6 1.6 0 001.6-1.6L17.5 7"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7"/></symbol>
+  <symbol id="i-check-square" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M8.5 12.2l2.4 2.4 4.8-5"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3.5l8.5 4.7L12 12.9 3.5 8.2z"/><path d="M4 12.3l8 4.4 8-4.4"/><path d="M4 16.4l8 4.4 8-4.4"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.5l1.9 5.6L19.5 11l-5.6 1.9L12 18.5l-1.9-5.6L4.5 11l5.6-1.9z"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 1.8"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 11-2.2-5.3"/><path d="M19.5 4.8v5h-5"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 107.5-7.5A7.8 7.8 0 006.1 7L4 9.1"/><path d="M4 4.5v4.6h4.6"/><path d="M12 8v4l2.6 1.6"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M9 6.5l9 5.5-9 5.5z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 6v12M15 6v12"/></symbol>
+  <symbol id="i-audio" viewBox="0 0 24 24"><path d="M4 10v4M8 7.5v9M12 5v14M16 8v8M20 10.5v3"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0013 0M12 18v3M8.5 21h7"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10.5 13.5l3-3"/><path d="M8.2 15.8l-1.1 1.1a3.3 3.3 0 01-4.7-4.7l2.5-2.5a3.3 3.3 0 014.7 0"/><path d="M15.8 8.2l1.1-1.1a3.3 3.3 0 014.7 4.7l-2.5 2.5a3.3 3.3 0 01-4.7 0"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.6" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="18.5" cy="12" r="1.3" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-maximize" viewBox="0 0 24 24"><path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/></symbol>
+  <symbol id="i-minimize" viewBox="0 0 24 24"><path d="M4 9h5V4M20 9h-5V4M4 15h5v5M20 15h-5v5"/></symbol>
+  <symbol id="i-zoom-in" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20M10.5 7.5v6M7.5 10.5h6"/></symbol>
+  <symbol id="i-zoom-out" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20M7.5 10.5h6"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M4 4l16 16"/><path d="M9.9 5.3A10.7 10.7 0 0112 5c5 0 8.5 4.2 9.5 7a12.7 12.7 0 01-3.4 4.5M6.1 6.1A12.7 12.7 0 002.5 12c1 2.8 4.5 7 9.5 7a10.9 10.9 0 004.4-.9"/><path d="M9.9 9.9a3 3 0 004.2 4.2"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 014 19V8a1.5 1.5 0 011.5-1.5H10"/></symbol>
+  <symbol id="i-table" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M3 14h18M9 4v16M15 4v16"/></symbol>
+  <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="M14.5 6l-6 6 6 6"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7a2 2 0 002 2h3"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.7v.6"/></symbol>
+</svg>
+
+<script src="app.js"></script>
+<script src="tracking.js"></script>
+<script src="suggestions.js"></script>
+</body>
+</html>

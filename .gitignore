@@ -1,0 +1,11 @@
+node_modules/
+__pycache__/
+*.py[cod]
+.env.local
+.pi-agent/
+agent-workspace/.pi/
+.debug/
+data/
+projects/*/.pi/
+projects/*/uploads/
+projects/*/exports/
