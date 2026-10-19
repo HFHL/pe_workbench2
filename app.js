@@ -148,7 +148,7 @@ Object.assign(state, {
   modelId: 'deepseek-v4-pro',
   uploading: false,
   uploadTotal: 0,
-  uploadDone: 0,
+  uploadIndex: 0,
 });
 
 let uid = 0;
@@ -2927,23 +2927,36 @@ async function uploadPending(attached) {
   if (!staged.length) return attached;
   state.uploading = true;
   state.uploadTotal = staged.length;
-  state.uploadDone = 0;
+  state.uploadIndex = 0;
+  for (const item of staged) {
+    item.status = 'queued';
+    item.progress = 0;
+    delete item.error;
+  }
   syncComposer();
   renderAttachments();
   let audioCount = 0;
   let audioUnconfigured = false;
+  const failed = [];
   try {
     for (const item of staged) {
+      state.uploadIndex += 1;
       item.status = 'uploading';
+      item.progress = 0;
       renderAttachments();
       let uploaded;
       try {
-        uploaded = await uploadFile(item.file);
+        uploaded = await uploadFile(item.file, fraction => {
+          item.progress = Math.min(Math.max(fraction, 0), 1);
+          updateChipProgress(item);
+        });
       } catch (error) {
         item.status = 'error';
+        item.progress = 0;
+        item.error = error.message || '上传失败';
+        failed.push(item);
         renderAttachments();
-        toast(`「${item.name}」上传失败：${error.message || '请重试'}`);
-        throw error;
+        continue;
       }
       const material = { ...uploaded.material, uploadedPath: uploaded.path, flash: true };
       try {
@@ -2959,16 +2972,27 @@ async function uploadPending(attached) {
         }
       }
       delete item.file;
-      Object.assign(item, material, { uploadedPath: uploaded.path, staged: false, status: 'done' });
-      state.uploadDone += 1;
+      Object.assign(item, material, {
+        uploadedPath: uploaded.path,
+        staged: false,
+        status: 'done',
+        progress: 1,
+      });
+      delete item.error;
       renderAttachments();
     }
   } finally {
     state.uploading = false;
     state.uploadTotal = 0;
-    state.uploadDone = 0;
+    state.uploadIndex = 0;
     syncComposer();
     renderAttachments();
+  }
+  if (failed.length) {
+    toast(`${failed.length} 个文件上传失败，再次发送可重试`);
+    const error = new Error('upload failed');
+    error.failed = failed;
+    throw error;
   }
   if (audioCount) {
     toast(audioUnconfigured
@@ -2976,6 +3000,16 @@ async function uploadPending(attached) {
       : `${audioCount} 个音频已上传，正在后台转写`);
   }
   return attached;
+}
+
+function updateChipProgress(item) {
+  const chip = attachmentsEl.querySelector(`.chip[data-chip-id="${CSS.escape(item.id)}"]`);
+  if (!chip) return;
+  const pct = Math.round((item.progress || 0) * 100);
+  const status = chip.querySelector('.chip-status');
+  if (status && item.status === 'uploading') status.textContent = `${pct}%`;
+  const bar = chip.querySelector('.chip-bar');
+  if (bar) bar.style.width = `${pct}%`;
 }
 
 function autosize() {
@@ -2993,25 +3027,30 @@ function renderAttachments() {
     return;
   }
   const stagedCount = state.pending.filter(f => f.staged).length;
+  const uploadedCount = state.pending.filter(f => f.uploadedPath && !f.staged).length;
   const label = state.uploading
-    ? `上传中 ${Math.min(state.uploadDone + 1, state.uploadTotal)}/${state.uploadTotal}`
+    ? `上传队列 ${Math.max(state.uploadIndex, 1)}/${state.uploadTotal}`
     : stagedCount
       ? '附件（发送后上传）'
-      : '引用资料';
-  attachmentsEl.innerHTML = `<span class="attachments-label">${icon(stagedCount ? 'paperclip' : 'link', 12)}${label}</span>` + state.pending.map(f => {
-    const status = !f.staged
-      ? ''
-      : f.status === 'error'
-        ? `<span class="chip-status is-error">失败</span>`
-        : f.status === 'uploading'
-          ? `<span class="chip-status is-live">上传中</span>`
-          : `<span class="chip-status">待上传</span>`;
+      : uploadedCount
+        ? '附件（已上传）'
+        : '引用资料';
+  const labelIcon = stagedCount || uploadedCount ? 'paperclip' : 'link';
+  attachmentsEl.innerHTML = `<span class="attachments-label">${icon(labelIcon, 12)}${label}</span>` + state.pending.map(f => {
+    const pct = Math.round((f.progress || 0) * 100);
+    let status = '';
+    if (f.status === 'error') status = `<span class="chip-status is-error" title="${esc(f.error || '')}">失败</span>`;
+    else if (f.status === 'queued') status = `<span class="chip-status is-queued">排队中</span>`;
+    else if (f.status === 'uploading') status = `<span class="chip-status is-live">${pct}%</span>`;
+    else if (f.staged) status = `<span class="chip-status">待发送</span>`;
+    else if (f.uploadedPath) status = `<span class="chip-status is-done">已上传</span>`;
     return `
-    <span class="chip${f.staged ? ' is-staged' : ''}${f.status === 'error' ? ' is-error' : ''}">
+    <span class="chip${f.staged ? ' is-staged' : ''}${f.status === 'error' ? ' is-error' : ''}" data-chip-id="${esc(f.id)}">
       ${icon(kindOf(f.name).icon, 13)}
       <span class="chip-name">${esc(f.name)}</span>
       ${status}
       <button type="button" class="chip-x" data-remove="${esc(f.id)}" aria-label="移除 ${esc(f.name)}">${icon('x', 13)}</button>
+      <span class="chip-bar" style="width:${f.status === 'uploading' ? pct : 0}%"></span>
     </span>`;
   }).join('');
   syncReferenceButton();
@@ -3161,18 +3200,37 @@ async function api(pathname, { method = 'GET', body } = {}) {
   return data;
 }
 
-async function uploadFile(file) {
-  const res = await fetch(withProject('/api/upload'), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/octet-stream',
-      'X-File-Name': encodeURIComponent(file.name),
-    },
-    body: file,
+function uploadFile(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', withProject('/api/upload'));
+    xhr.timeout = 15 * 60 * 1000;
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
+    let lastPct = -1;
+    xhr.upload.addEventListener('progress', event => {
+      if (!event.lengthComputable || !event.total) return;
+      const fraction = event.loaded / event.total;
+      const pct = Math.round(fraction * 100);
+      if (pct === lastPct) return;
+      lastPct = pct;
+      onProgress?.(fraction);
+    });
+    xhr.addEventListener('load', () => {
+      let data = {};
+      try {
+        data = JSON.parse(xhr.responseText || '{}');
+      } catch {
+        /* non-JSON error page */
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(data.error || `上传失败（HTTP ${xhr.status}）`));
+    });
+    xhr.addEventListener('error', () => reject(new Error('网络错误，上传中断')));
+    xhr.addEventListener('timeout', () => reject(new Error('上传超时')));
+    xhr.addEventListener('abort', () => reject(new Error('上传已取消')));
+    xhr.send(file);
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'upload failed');
-  return data;
 }
 
 function decorateSession(item) {

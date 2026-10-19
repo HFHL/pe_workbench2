@@ -1834,6 +1834,10 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// Large workbooks/audio on a slow link can legitimately take many minutes.
+server.requestTimeout = 30 * 60 * 1000;
+server.headersTimeout = 60 * 1000;
+
 server.listen(PORT, HOST, () => {
   console.log(`Workbench listening on http://${HOST}:${PORT}`);
   console.log(`model: ${MODEL_ID} · projects: ${Array.from(contexts.keys()).join(", ")}`);

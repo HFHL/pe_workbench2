@@ -191,15 +191,18 @@ svg{display:block}
 .composer-wrap.is-receive .composer{border-color:#BFD6C3;background:#FCFDFB;box-shadow:0 0 0 3px rgba(94,140,97,.13)}
 .composer-wrap.is-receive .chip{animation:chip-in .26s var(--ease)}
 @keyframes chip-in{from{opacity:0;transform:translateY(3px)}}
-.chip{display:inline-flex;align-items:center;gap:6px;height:26px;max-width:230px;padding:0 4px 0 8px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bone);font-size:12px;color:var(--ink-2)}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;max-width:230px;padding:0 4px 0 8px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bone);font-size:12px;color:var(--ink-2);position:relative;overflow:hidden}
 .chip svg{color:var(--muted)}
 .chip-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chip-x{width:18px;height:18px;border-radius:4px;display:grid;place-items:center;color:var(--faint);flex:none}
 .chip-x:hover{background:rgba(17,17,17,.06);color:var(--ink)}
 .chip.is-staged{border-style:dashed;background:#FBFAF7}
 .chip.is-error{border-color:#E3B9B3;background:#FDF7F6}
+.chip-bar{position:absolute;left:0;bottom:0;height:2px;width:0;background:#5E8C61;transition:width .15s linear;pointer-events:none}
 .chip-status{flex:none;padding:2px 4px;border-radius:4px;background:rgba(17,17,17,.05);font-size:10px;line-height:1.2;color:var(--faint);white-space:nowrap}
+.chip-status.is-queued{background:#F1F0EC;color:#8A857B}
 .chip-status.is-live{background:#EDF3EC;color:#527A55}
+.chip-status.is-done{background:#EDF3EC;color:#527A55}
 .chip-status.is-error{background:#F7E4E1;color:#A14B40}
 .composer-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px}
 .composer-left,.composer-right{display:flex;align-items:center;gap:8px}
