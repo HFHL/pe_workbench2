@@ -111,10 +111,17 @@
     }
   }
 
+  function trackingViewKey(tracking) {
+    if (!tracking) return '';
+    const { runStep, runStartedAt, ...rest } = tracking;
+    return JSON.stringify(rest);
+  }
+
   function upsertTracking(tracking) {
     if (!tracking) return;
     const index = ui.trackings.findIndex((item) => item.id === tracking.id);
     const previous = index >= 0 ? ui.trackings[index] : null;
+    const changed = !previous || trackingViewKey(previous) !== trackingViewKey(tracking);
     tracking.runStep = tracking.runStep ?? previous?.runStep;
     tracking.runStartedAt = tracking.runStartedAt ?? previous?.runStartedAt;
     if (index >= 0) ui.trackings[index] = tracking;
@@ -125,12 +132,14 @@
       toast(failed ? '跟踪运行失败，详见运行记录' : '跟踪运行完成');
     }
     if (ui.openId === tracking.id) {
-      renderDetail();
+      if (changed) renderDetail();
       if (tracking.running) watchRun(tracking.id);
     }
-    renderPanel();
-    updateFilterCount();
-    window.NextActions?.refresh?.();
+    if (changed) {
+      renderPanel();
+      updateFilterCount();
+      window.NextActions?.refresh?.();
+    }
   }
 
   function removeTracking(id) {

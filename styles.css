@@ -358,10 +358,6 @@ kbd{font-family:"SF Mono",ui-monospace,"JetBrains Mono",monospace;font-size:11px
   .d-foot{padding:10px 14px}
 }
 
-@media (prefers-reduced-motion:no-preference){
-  .msg{animation:rise .28s var(--ease)}
-  @keyframes rise{from{opacity:0;transform:translateY(4px)}}
-}
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important;scroll-behavior:auto!important}
 }

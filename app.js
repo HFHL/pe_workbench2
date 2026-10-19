@@ -466,6 +466,7 @@ function messageHTML(m) {
 }
 
 let renderScheduled = false;
+let liveArticle = null;
 function scheduleThread(scroll = true) {
   if (renderScheduled) return;
   renderScheduled = true;
@@ -478,16 +479,70 @@ function liveMessageHTML() {
   const status = esc(liveStatusText());
   const inlineStatus = live.tools.length
     ? ''
-    : `<div class="live-status"><span class="live-dot"></span><span id="liveStatus" aria-live="polite">${status}</span>${hasContent ? '' : '<span class="typing"><i></i><i></i><i></i></span>'}</div>`;
-  return `<article class="msg assistant">
+    : `<div class="live-status" id="liveStatusHost"><span class="live-dot"></span><span id="liveStatus" aria-live="polite">${status}</span>${hasContent ? '' : '<span class="typing"><i></i><i></i><i></i></span>'}</div>`;
+  return `<article class="msg assistant" id="liveMsg">
       <span class="msg-avatar">${icon('spark', 15)}</span>
       <div>
         <div class="msg-head"><span class="msg-name">Workbench</span><span class="msg-time">正在输出</span></div>
-        ${live.text ? `<div class="msg-body md-preview">${renderMarkdownHTML(live.text, '')}</div>` : ''}
+        <div class="msg-body md-preview" id="liveBody"${live.text ? '' : ' hidden'}>${live.text ? renderMarkdownHTML(live.text, '') : ''}</div>
         ${inlineStatus}
-        ${live.tools.length ? toolGroupHTML(live.tools, { live: true }) : ''}
+        <div id="liveTools">${live.tools.length ? toolGroupHTML(live.tools, { live: true }) : ''}</div>
       </div>
     </article>`;
+}
+
+function updateLiveMessage() {
+  if (!liveArticle) return;
+  const live = state.live;
+  const hasContent = Boolean(live.text || live.tools.length);
+
+  const body = liveArticle.querySelector('#liveBody');
+  if (body) {
+    if (live.text) {
+      const html = renderMarkdownHTML(live.text, '');
+      if (body.innerHTML !== html) body.innerHTML = html;
+      body.hidden = false;
+    } else {
+      if (body.innerHTML) body.innerHTML = '';
+      body.hidden = true;
+    }
+  }
+
+  let statusHost = liveArticle.querySelector('#liveStatusHost');
+  if (live.tools.length) {
+    statusHost?.remove();
+  } else {
+    if (!statusHost) {
+      statusHost = document.createElement('div');
+      statusHost.className = 'live-status';
+      statusHost.id = 'liveStatusHost';
+      statusHost.innerHTML = '<span class="live-dot"></span><span id="liveStatus" aria-live="polite"></span>';
+      const toolsHost = liveArticle.querySelector('#liveTools');
+      if (toolsHost) toolsHost.before(statusHost);
+    }
+    const statusEl = statusHost.querySelector('#liveStatus');
+    const text = liveStatusText();
+    if (statusEl && statusEl.textContent !== text) statusEl.textContent = text;
+    const typing = statusHost.querySelector('.typing');
+    if (hasContent && typing) typing.remove();
+    if (!hasContent && !typing) statusHost.insertAdjacentHTML('beforeend', '<span class="typing"><i></i><i></i><i></i></span>');
+  }
+
+  const toolsHost = liveArticle.querySelector('#liveTools');
+  if (toolsHost) {
+    const signature = live.tools.map(tool => `${tool.id}:${tool.status}:${String(tool.output || '').length}`).join('|');
+    if (toolsHost.dataset.signature !== signature) {
+      const wasOpen = Boolean(toolsHost.querySelector('details')?.open);
+      toolsHost.innerHTML = live.tools.length ? toolGroupHTML(live.tools, { live: true }) : '';
+      toolsHost.dataset.signature = signature;
+      const details = toolsHost.querySelector('details');
+      if (wasOpen && details) details.open = true;
+    } else {
+      const label = toolsHost.querySelector('#liveStatus');
+      const text = liveStatusText();
+      if (label && label.textContent !== text) label.textContent = text;
+    }
+  }
 }
 
 function renderThread(scroll = false) {
@@ -496,11 +551,23 @@ function renderThread(scroll = false) {
     threadEl.innerHTML = `<div class="thread-empty">
         <div><div class="empty-mark">${icon('spark', 17)}</div><p class="empty-title">还没有消息</p></div>
       </div>`;
-  } else {
-    const live = state.streaming ? liveMessageHTML() : '';
-    threadEl.innerHTML = `<div class="thread-inner">${messages.map(messageHTML).join('')}${live}</div>`;
-    void hydrateReports(threadEl);
+    liveArticle = null;
+    return;
   }
+  if (state.streaming) {
+    if (!liveArticle || !threadEl.contains(liveArticle)) {
+      threadEl.innerHTML = `<div class="thread-inner">${messages.map(messageHTML).join('')}${liveMessageHTML()}</div>`;
+      liveArticle = threadEl.querySelector('#liveMsg');
+      void hydrateReports(threadEl);
+    } else {
+      updateLiveMessage();
+    }
+    if (scroll) threadEl.scrollTop = threadEl.scrollHeight;
+    return;
+  }
+  threadEl.innerHTML = `<div class="thread-inner">${messages.map(messageHTML).join('')}</div>`;
+  liveArticle = null;
+  void hydrateReports(threadEl);
   if (scroll) threadEl.scrollTop = threadEl.scrollHeight;
 }
 
@@ -2905,6 +2972,7 @@ async function send() {
   refreshFileCards();
   state.streaming = true;
   state.live = { text: '', tools: [], startedAt: Date.now() };
+  liveArticle = null;
   syncStop();
   window.NextActions?.refresh?.();
   renderThread(true);
@@ -3545,6 +3613,7 @@ function handleServerEvent(ev) {
       syncStop();
       renderSessions();
       renderAllChrome();
+      liveArticle = null;
       renderThread(true);
       window.NextActions?.refresh?.();
       break;
@@ -3578,8 +3647,8 @@ function handleServerEvent(ev) {
     case 'run.settled':
       state.streaming = false;
       syncStop();
-      scheduleThread();
       window.NextActions?.refresh?.();
+      // 保留当前实时内容，等 snapshot 一次性替换为最终消息，避免结束瞬间闪一下。
       void refreshSnapshot();
       break;
     case 'session.updated':
@@ -3615,9 +3684,11 @@ async function refreshSnapshot() {
     syncStop();
     renderSessions();
     renderAllChrome();
+    liveArticle = null;
     renderThread(true);
   } catch {
-    /* keep the optimistic view */
+    liveArticle = null;
+    scheduleThread();
   }
 }
 
