@@ -146,6 +146,9 @@ Object.assign(state, {
   live: { text: '', tools: [], startedAt: 0 },
   es: null,
   modelId: 'deepseek-v4-pro',
+  uploading: false,
+  uploadTotal: 0,
+  uploadDone: 0,
 });
 
 let uid = 0;
@@ -2868,13 +2871,31 @@ function renderAllChrome() {
 
 
 async function send() {
+  if (state.uploading) return;
   const text = inputEl.value.trim();
   const attached = state.pending.slice();
   if (!text && !attached.length) return;
 
-  if (!state.activeSession) await createSession();
+  // 文件先留在输入框里，点发送时才真正上传。
+  if (attached.some(item => item.staged)) {
+    try {
+      await uploadPending(attached);
+    } catch {
+      return; // 上传失败：保留输入内容和附件，方便直接重试
+    }
+  }
+
+  if (!state.activeSession) {
+    try {
+      await createSession();
+    } catch (error) {
+      toast(error.message || '新建会话失败');
+      return;
+    }
+  }
   const sessionId = state.activeSession;
 
+  const paths = attached.map(f => f.uploadedPath || f.relPath).filter(Boolean);
   state.messages.push({ role: 'user', text: text || '看一下这几个文件。', time: nowHM() });
   state.pending = [];
   inputEl.value = '';
@@ -2891,7 +2912,7 @@ async function send() {
   try {
     await api(`/api/sessions/${sessionId}/messages`, {
       method: 'POST',
-      body: { text, attachments: attached.map(f => f.uploadedPath || f.relPath).filter(Boolean) },
+      body: { text, attachments: paths },
     });
   } catch (error) {
     state.streaming = false;
@@ -2899,6 +2920,62 @@ async function send() {
     renderThread(true);
     toast(error.message || '发送失败');
   }
+}
+
+async function uploadPending(attached) {
+  const staged = attached.filter(item => item.staged && item.file);
+  if (!staged.length) return attached;
+  state.uploading = true;
+  state.uploadTotal = staged.length;
+  state.uploadDone = 0;
+  syncComposer();
+  renderAttachments();
+  let audioCount = 0;
+  let audioUnconfigured = false;
+  try {
+    for (const item of staged) {
+      item.status = 'uploading';
+      renderAttachments();
+      let uploaded;
+      try {
+        uploaded = await uploadFile(item.file);
+      } catch (error) {
+        item.status = 'error';
+        renderAttachments();
+        toast(`「${item.name}」上传失败：${error.message || '请重试'}`);
+        throw error;
+      }
+      const material = { ...uploaded.material, uploadedPath: uploaded.path, flash: true };
+      try {
+        upsertMaterial(material);
+      } catch (error) {
+        // 单个文件的界面刷新失败不应中断整批上传。
+        console.error('[upload] material UI update failed', error);
+      }
+      if (AUDIO_PREVIEW.has(extOf(item.name))) {
+        audioCount += 1;
+        if (material.asr?.status === 'unconfigured' || material.asr?.configured === false) {
+          audioUnconfigured = true;
+        }
+      }
+      delete item.file;
+      Object.assign(item, material, { uploadedPath: uploaded.path, staged: false, status: 'done' });
+      state.uploadDone += 1;
+      renderAttachments();
+    }
+  } finally {
+    state.uploading = false;
+    state.uploadTotal = 0;
+    state.uploadDone = 0;
+    syncComposer();
+    renderAttachments();
+  }
+  if (audioCount) {
+    toast(audioUnconfigured
+      ? '音频已上传；在 .env.local 配置 ASR_API_KEY 后即可转写'
+      : `${audioCount} 个音频已上传，正在后台转写`);
+  }
+  return attached;
 }
 
 function autosize() {
@@ -2909,12 +2986,34 @@ function autosize() {
 function renderAttachments() {
   const has = state.pending.length > 0;
   attachmentsEl.hidden = !has;
-  attachmentsEl.innerHTML = !has ? '' : `<span class="attachments-label">${icon('link', 12)}引用资料</span>` + state.pending.map(f => `
-    <span class="chip">
+  if (!has) {
+    attachmentsEl.innerHTML = '';
+    syncReferenceButton();
+    window.NextActions?.refresh?.();
+    return;
+  }
+  const stagedCount = state.pending.filter(f => f.staged).length;
+  const label = state.uploading
+    ? `上传中 ${Math.min(state.uploadDone + 1, state.uploadTotal)}/${state.uploadTotal}`
+    : stagedCount
+      ? '附件（发送后上传）'
+      : '引用资料';
+  attachmentsEl.innerHTML = `<span class="attachments-label">${icon(stagedCount ? 'paperclip' : 'link', 12)}${label}</span>` + state.pending.map(f => {
+    const status = !f.staged
+      ? ''
+      : f.status === 'error'
+        ? `<span class="chip-status is-error">失败</span>`
+        : f.status === 'uploading'
+          ? `<span class="chip-status is-live">上传中</span>`
+          : `<span class="chip-status">待上传</span>`;
+    return `
+    <span class="chip${f.staged ? ' is-staged' : ''}${f.status === 'error' ? ' is-error' : ''}">
       ${icon(kindOf(f.name).icon, 13)}
       <span class="chip-name">${esc(f.name)}</span>
+      ${status}
       <button type="button" class="chip-x" data-remove="${esc(f.id)}" aria-label="移除 ${esc(f.name)}">${icon('x', 13)}</button>
-    </span>`).join('');
+    </span>`;
+  }).join('');
   syncReferenceButton();
   window.NextActions?.refresh?.();
 }
@@ -2932,46 +3031,43 @@ function syncReferenceButton() {
 
 function syncComposer() {
   const hasText = inputEl.value.trim().length > 0;
-  sendBtn.disabled = !hasText && state.pending.length === 0;
+  sendBtn.disabled = state.uploading || (!hasText && state.pending.length === 0);
 }
 
 /* ---------- inputs: upload ---------- */
 
 const TEXTUAL = new Set(['md', 'txt', 'csv', 'json', 'js', 'ts', 'css', 'html', 'xml', 'yml', 'yaml', 'log', 'sh']);
 
-async function addFiles(fileList) {
+function addFiles(fileList) {
+  if (state.uploading) {
+    toast('正在上传，请稍候再添加');
+    return;
+  }
   const added = [];
-  let audioCount = 0;
-  let audioUnconfigured = false;
   for (const raw of Array.from(fileList)) {
-    let uploaded;
-    try {
-      uploaded = await uploadFile(raw);
-    } catch (error) {
-      toast(`上传失败：${raw.name}`);
+    const name = raw.name || 'file';
+    const limit = AUDIO_PREVIEW.has(extOf(name)) ? 120 * 1024 * 1024 : 30 * 1024 * 1024;
+    if (raw.size > limit) {
+      toast(`「${name}」超过 ${Math.round(limit / 1024 / 1024)}MB 限制`);
       continue;
     }
-    const material = { ...uploaded.material, uploadedPath: uploaded.path, flash: true };
-    if (AUDIO_PREVIEW.has(extOf(raw.name))) {
-      audioCount += 1;
-      if (material.asr?.status === 'unconfigured' || material.asr?.configured === false) {
-        audioUnconfigured = true;
-      }
-    }
-    upsertMaterial(material);
-    added.push(material);
+    const duplicate = state.pending.some(item => item.file
+      && item.file.name === raw.name
+      && item.file.size === raw.size
+      && item.file.lastModified === raw.lastModified);
+    if (duplicate) continue;
+    const item = { id: nextId(), name, size: raw.size, file: raw, staged: true, status: 'staged' };
+    state.pending.push(item);
+    added.push(item);
   }
-  state.pending.push(...added);
-  if (state.filter !== 'input') setFilter('input');
+  if (!added.length) {
+    if (state.pending.length) toast('这些文件已经在输入框中');
+    return;
+  }
   renderAttachments();
   syncComposer();
-  setFilesOpen(true);
-  renderPanel();
-  if (audioCount) {
-    toast(audioUnconfigured
-      ? '音频已上传；在 .env.local 配置 ASR_API_KEY 后即可转写'
-      : `${audioCount} 个音频已上传，正在后台转写`);
-  }
+  toast(`已添加 ${added.length} 个文件，发送时上传`);
+  inputEl.focus();
 }
 
 /* ---------- filters / panel ---------- */
