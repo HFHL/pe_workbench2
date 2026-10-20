@@ -172,8 +172,9 @@ async function openProjectContext(row, existingStore = null) {
     projectNote: row.note || "",
     seed: false,
   });
-  // Transport-level replay log for the AG-UI stream. Rows live in this project's
-  // own SQLite file, so two projects can never replay each other's events.
+  // Transport-level replay log for the AG-UI stream. All projects share
+  // data/workbench.db, so isolation is enforced by the workspace_id column on
+  // every read (each ctx holds a log bound to its own workspaceId).
   const agentEvents = new AgentEventLog({ store, workspaceId: row.id });
   const workbooks = new WorkbookStore({ store });
   const previews = new ExcelPreviewStore({ store });
@@ -2272,6 +2273,15 @@ async function handleApi(req, res, url) {
     }
 
     if (action === "messages" && req.method === "POST") {
+      // A legacy prompt must not be injected into an active AG-UI run: it would
+      // be queued as a followUp and its events would leak into that run.
+      if (entry.agui?.isRunning) {
+        return json(res, 409, {
+          error: "an AG-UI run is active on this session",
+          code: "ag_ui_run_active",
+          threadId: entry.id,
+        });
+      }
       const body = await readJson(req);
       const text = String(body.text || "").trim();
       const attachments = Array.isArray(body.attachments) ? body.attachments : [];
@@ -2315,7 +2325,10 @@ async function handleApi(req, res, url) {
     }
 
     if (action === "abort" && req.method === "POST") {
-      await entry.session.abort();
+      // Keep both abort entry points identical: adapter.abort() stops the AG-UI
+      // stream immediately, then lets Pi settle.
+      if (entry.agui?.isRunning) await entry.agui.abort();
+      else await entry.session.abort();
       return json(res, 200, { ok: true });
     }
 

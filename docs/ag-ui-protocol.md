@@ -19,7 +19,7 @@
 |---|---|
 | `threadId` | Pi `sessionId`（稳定不变） |
 | `runId` | 每次 prompt 前生成（`run_<uuid>`） |
-| `messageId` | 优先 Pi 消息自带的 `id`，否则 adapter 生成 `msg_<uuid>` |
+| `messageId` | 优先 Pi 消息自带的 `id`（当前 `AssistantMessage` 没有该字段，因此实际走生成路径），否则生成 `msg_<uuid>` |
 | `toolCallId` | Pi `toolCallId` |
 | `eventId` | `evt_<runId>_<sequence 补零>`，随行持久化，重放不变 |
 | `sequence` | 每个 run 从 1 开始严格递增，`unique(run_id, sequence)` 兜底 |
@@ -34,7 +34,7 @@
 | `message_update.text_delta` | `TEXT_MESSAGE_CONTENT` | 只转发文本增量（thinking 不转发） |
 | assistant `message_end` | `TEXT_MESSAGE_END` | 无增量时用最终 content 补发一次 |
 | `tool_execution_start` | `TOOL_CALL_START` + `TOOL_CALL_ARGS` | args 为 JSON 字符串 |
-| `tool_execution_update` | `CUSTOM`（`pi.tool_progress`） | 不干扰标准工具事件 |
+| `tool_execution_update` | `CUSTOM`（`pi.tool_progress`） | 不干扰标准工具事件；`value.content` 是**累计快照**，不是 delta |
 | `tool_execution_end` | `TOOL_CALL_END` + `TOOL_CALL_RESULT` | 顺序固定；`isError` 为扩展字段 |
 | `agent_settled` | `RUN_FINISHED` | 关闭未闭合消息/工具后再发 |
 | prompt 异常 / 适配器异常 / `stopReason: "error"` | `RUN_ERROR` | 同样先补齐未闭合项 |
@@ -75,7 +75,7 @@ create table agent_events (
 索引：`(workspace_id, thread_id, ordinal)`、`(run_id, sequence)`。
 建表在 `Store.migrate()`，增量迁移，不重建库；`node:sqlite`，未引入 `better-sqlite3`。
 
-读取一律带 `workspace_id` 过滤。每个项目本来就有独立数据库文件，因此两个项目既无法互相 `list`，也无法按 `eventId` 互相读取。
+所有项目**共用**同一个 `data/workbench.db`，隔离靠 `workspace_id`：读取（含按 `runId` / `eventId`）一律带 `workspace_id` 过滤，`agentEventLog` 绑定到具体 workspace。`ordinal` 是全库单调计数，`unique(run_id, sequence)` 只保证 run 内序号。
 
 ## 6. HTTP 接口（`ag-ui-endpoint.mjs` + `server.mjs`）
 
@@ -107,8 +107,9 @@ create table agent_events (
 ```
 
 - 返回 SSE；`projectId` 必须与路径解析出的项目一致（否则 403）。
-- 附件必须是项目内相对路径（绝对路径、`..` 逃逸一律丢弃）；提示词按现有格式追加 `[已上传资料]` 列表。
+- 附件必须是项目内**真实存在**的普通文件：先 `realpath` 再判断是否仍在项目根内（`..` 逃逸、指向项目外的软链、缺失文件、目录一律丢弃）；项目内的绝对路径会被规范化为相对路径。提示词按现有格式追加 `[已上传资料]` 列表。
 - 同一 thread 已有活动 run → 409 `run_in_progress`；Pi 正在流式（例如旧接口发的消息）→ 409 `thread_busy`。
+- 反向也成立：AG-UI run 进行中，旧 `POST /api/sessions/:id/messages` 返回 409 `ag_ui_run_active`，避免 followUp 事件混进当前 run。
 
 ### `POST /api/ag-ui/agent/pi/connect`
 
@@ -116,7 +117,7 @@ create table agent_events (
 { "threadId": "<pi sessionId>" }
 ```
 
-只重放/续传，不启动新 run；连接建立时若该 thread 有活动 run，则持续流式到终态。
+只重放/续传，不启动新 run。重放覆盖该 thread **所有** run（按 `ordinal` 排序），不会在历史 run 的终态处提前结束；队列排空后若没有活动 run 就关闭，有活动 run 则持续流式，直到该 run 的终态再关闭。
 
 ### `POST /api/ag-ui/agent/pi/stop/:threadId`
 
@@ -137,7 +138,7 @@ data: {"type":"RUN_STARTED","timestamp":...,"threadId":"...","runId":"..."}
 
 游标优先级：
 
-1. `Last-Event-ID` 请求头（标准 EventSource 行为）
+1. `Last-Event-ID` 请求头（EventSource 的断线续传字段；本接口是 POST，客户端需自己带上）
 2. `afterEventId`（query、JSON body 或 `forwardedProps`）
 
 语义：
@@ -145,7 +146,8 @@ data: {"type":"RUN_STARTED","timestamp":...,"threadId":"...","runId":"..."}
 - 带 `runId` 的流（`/run`）按 run 内 `sequence` 续传。
 - `connect` 按整条 thread 的 `ordinal` 续传，可跨多个 run。
 - 先订阅实时回调 → 再读 SQLite 重放 → 再按游标排空队列；因此「读库期间产生的事件」不会丢，重放与队列里重复的事件按 `eventId`/游标去重。
-- 终态事件发出后主动关闭 SSE；活动 run 才保持连接（15s 心跳 `: ping`）。
+- 终态事件发出后主动关闭 SSE 并**退订**实时回调；活动 run 才保持连接（15s 心跳 `: ping`）。客户端断开由 `ServerResponse` 的 `close` 事件感知并释放订阅（POST 场景下 `IncomingMessage` 的 `close` 太早，不能用于此目的）。
+- 若终态事件写库失败：SSE 客户端仍会收到该帧（无 `id:` 行，`data` 里带 `"persisted": false`），stream 随即关闭；该帧无法重放，这是“宁可丢重放、不可丢实时终态”的取舍。
 - 超过 5000 条时自动分页，不会截断。
 
 ## 8. 兼容性
@@ -159,7 +161,7 @@ data: {"type":"RUN_STARTED","timestamp":...,"threadId":"...","runId":"..."}
 - `GET /api/events`
 - `npm start` → `node server.mjs`
 
-前端默认仍走旧接口；AG-UI 是并行新增的传输层。同一会话两条路径可共存，但同一时刻只允许一个活动 run（AG-UI 侧返回 409）。
+前端默认仍走旧接口；AG-UI 是并行新增的传输层。同一会话两条路径可共存，但同一时刻只允许一个活动 run：AG-UI 发起时检查 `session.isStreaming`，旧 `/messages` 则检查 `entry.agui.isRunning`，两个方向都返回 409。旧 `/abort` 在有 AG-UI run 时转调 `adapter.abort()`，与 `/stop` 语义一致（立即停止流式）。
 
 ## 9. 测试
 
@@ -167,14 +169,17 @@ data: {"type":"RUN_STARTED","timestamp":...,"threadId":"...","runId":"..."}
 npm run test:protocol
 ```
 
-覆盖：ID 规则、状态机不变量、纯文本 / 文本→工具→文本 / 多工具 / 工具失败 / prompt 异常 /  assistant 报错后重试 / abort / 适配器异常 / sequence 与 eventId / SQLite 重启重放 / 跨项目隔离 / SSE 游标与实时握手 / 路由语义 / 旧接口回归（真实起服务）。
+覆盖（全部离线，另含一次真实起服务的旧接口回归）：ID 规则、状态机不变量（含终态拒绝、重复 START 拒绝）、纯文本 / 文本→工具→文本 / 多工具 / 工具失败 / prompt 异常 / assistant 报错后重试 / settled 后 reject / abort / 适配器异常 / 终态写库失败 / sequence 与 eventId / 数据库重开后重放 / 跨项目隔离 / SSE 游标、跨 run connect、实时握手、真实 HTTP 断线退订、写库失败时的 volatile 终态帧 / 413 与非法 JSON 映射 / 路由语义（含 connect 项目校验）/ 旧接口回归（真实起服务）。
+
+另做过一次**真实模型**冒烟（非测试套件，需要 API key）：普通问答、真实 `ls` 工具调用（事件顺序 `TOOL_CALL_START → ARGS → END → RESULT → TEXT_MESSAGE_*`）、断线后按 `Last-Event-ID` 重放（68 帧中只补 65 帧、id 完全一致）、运行中 `/stop`（`RUN_FINISHED{result:{aborted:true}}` 且之后无事件）。
 
 其他既有测试：`test:framework`、`test:monitoring`、`test:monitoring:store`、`test:tracking-tool`、`test:workbook`、`test:pdf`、`test:web-fetch`、`test:anysearch`、`test:asr`。
 
 ## 10. 已知边界 / 未验证
 
-- **没有发起真实模型调用**：真实 DeepSeek run 的事件顺序依赖 Pi 的 `agent_start → message_* → tool_execution_* → agent_settled` 契约；测试用 fake session 固定了这些 fixture。建议在有 API key 的环境跑一次真实短对话核对。
+- 自动化测试不发起真实模型调用（fake session + 固定 fixture）；真实链路由上面的一次性冒烟覆盖，未纳入 CI。
+- `agent.prompt` 抛错、且 Pi 先发 `agent_settled` 的路径，用“延迟一个宏任务再判定终态”处理；已由 fake session 覆盖，但没有在真实故障注入下验证。
 - 适配器按 `agent_start` 起 run；若进程在 run 中途崩溃，重放会停在半截（没有终态）。客户端可据 `RUN_STARTED` 无终态 + `connect` 立即关闭判断 run 已丢失。
 - 客户端断开 SSE 不会 abort run（与 CopilotKit 一致：需要显式 `/stop`）。
-- `agent_events` 没有自动清理策略；按项目库体积增长，后续可按 thread/时间做归档。
+- `agent_events` 没有自动清理策略；payload 含完整文本与最多 20k 的工具结果，按 thread/时间做归档是后续工作。
 - 未引入 `@ag-ui/core` 依赖（本机 npm 不可用且不希望引入未锁定的 zod 传递依赖），事件形状由测试断言。

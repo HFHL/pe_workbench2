@@ -405,7 +405,6 @@ export class Store {
       create index if not exists idx_source_bindings_tracking on source_bindings(tracking_id);
       create index if not exists idx_notifications_created on notifications(workspace_id, created_at desc);
       create index if not exists idx_agent_events_thread on agent_events(workspace_id, thread_id, ordinal);
-      create index if not exists idx_agent_events_run on agent_events(run_id, sequence);
     `);
 
     // Older databases predate the project metadata columns.
@@ -467,9 +466,10 @@ export class Store {
   /**
    * Append one AG-UI transport event. `sequence` starts at 1 per run and is
    * allocated by the caller (see lib/agent-protocol/event-log.mjs) so the
-   * event id can embed it; `ordinal` is a per-database monotonic counter used to
-   * replay a whole thread in order. Both counters live in SQLite so a process
-   * restart resumes where it stopped.
+   * event id can embed it; `ordinal` is a monotonic counter used to replay a
+   * whole thread in order. Counters live in SQLite, so a restart resumes where
+   * it stopped. Every project shares data/workbench.db, so workspace_id is part
+   * of every read and uniqueness only needs to hold inside a run/thread.
    */
   appendAgentEvent({ eventId, workspaceId, threadId, runId, sequence, eventType, payload }) {
     const createdAt = nowIso();
@@ -508,16 +508,20 @@ export class Store {
         // A concurrent writer (another process on the same DB) can slip in
         // between the max() read and the insert; the unique constraints are the
         // authority, so recompute the ordinal and retry.
-        if (attempt === 2 || !/UNIQUE|constraint/i.test(String(error?.message))) throw error;
+        if (attempt === 2 || !/UNIQUE constraint failed/i.test(String(error?.message))) throw error;
       }
     }
     return null;
   }
 
-  nextAgentSequence(runId) {
-    return this.db.prepare(
-      `select coalesce(max(sequence), 0) + 1 as value from agent_events where run_id = ?`,
-    ).get(runId).value;
+  nextAgentSequence(runId, { workspaceId } = {}) {
+    return workspaceId
+      ? this.db.prepare(
+          `select coalesce(max(sequence), 0) + 1 as value from agent_events where run_id = ? and workspace_id = ?`,
+        ).get(runId, workspaceId).value
+      : this.db.prepare(
+          `select coalesce(max(sequence), 0) + 1 as value from agent_events where run_id = ?`,
+        ).get(runId).value;
   }
 
   /**
@@ -528,9 +532,9 @@ export class Store {
     const rows = runId
       ? this.db.prepare(
           `select * from agent_events
-           where run_id = ? and sequence > ?
+           where run_id = ? and workspace_id = ? and sequence > ?
            order by sequence asc limit ?`,
-        ).all(runId, Number(afterSequence) || 0, limit)
+        ).all(runId, workspaceId, Number(afterSequence) || 0, limit)
       : this.db.prepare(
           `select * from agent_events
            where workspace_id = ? and thread_id = ? and ordinal > ?

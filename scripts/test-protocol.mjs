@@ -11,6 +11,7 @@
 
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
+import http from "node:http";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -33,6 +34,7 @@ import { PiAgUiAdapter } from "../lib/agent-protocol/pi-ag-ui-adapter.mjs";
 import {
   handleAgUiRequest,
   normalizeRunInput,
+  readBodyJson,
   replayCursor,
   streamAgUiEvents,
 } from "../lib/agent-protocol/ag-ui-endpoint.mjs";
@@ -145,12 +147,14 @@ class FakeRequest extends EventEmitter {
   }
 }
 
-class FakeResponse {
+class FakeResponse extends EventEmitter {
   constructor() {
+    super();
     this.chunks = [];
     this.statusCode = null;
     this.headers = null;
     this.writableEnded = false;
+    this.closed = false;
   }
 
   writeHead(statusCode, headers) {
@@ -166,6 +170,10 @@ class FakeResponse {
 
   end() {
     this.writableEnded = true;
+    if (!this.closed) {
+      this.closed = true;
+      this.emit("close");
+    }
   }
 
   get body() {
@@ -254,11 +262,21 @@ function testStateMachine() {
   machine.endTextMessage({ messageId: "m1" });
 
   assert.throws(
-    () => machine.appendText({ messageId: "m1", delta: "late" }),
+    () => machine.appendText({ messageId: "never-opened", delta: "x" }),
     (error) => error instanceof ProtocolError && error.code === "content_before_start",
-    "content after END must be rejected",
+    "content before START must be rejected",
   );
   check("TEXT_MESSAGE_CONTENT before START is rejected", true);
+  assert.throws(
+    () => machine.appendText({ messageId: "m1", delta: "late" }),
+    (error) => error instanceof ProtocolError && error.code === "content_after_end",
+    "content after END must be rejected",
+  );
+  assert.throws(
+    () => machine.startTextMessage({ messageId: "m1" }),
+    (error) => error instanceof ProtocolError && error.code === "message_already_ended",
+  );
+  check("a closed message cannot be restarted", true);
 
   machine.startToolCall({ toolCallId: "c1", toolName: "read", args: { path: "a.md" } });
   assert.throws(
@@ -357,6 +375,27 @@ async function testAdapter() {
     check("adapter is idle afterwards", adapter.isRunning === false && adapter.activeRunId === null);
   }
 
+  // 1b. a Pi-provided message id is preferred over a generated one
+  {
+    const log = new MemoryAgentEventLog({ workspaceId: "p1" });
+    const session = new FakePiSession({
+      script: async ({ emit }) => {
+        emit({ type: "agent_start" });
+        const message = assistantMessage();
+        message.id = "pi-msg-42";
+        emit({ type: "message_start", message });
+        emit(delta(message, "带 id"));
+        message.content = [{ type: "text", text: "带 id" }];
+        emit({ type: "message_end", message });
+        emit({ type: "agent_settled", aborted: false });
+      },
+    });
+    const adapter = new PiAgUiAdapter({ session, threadId: session.sessionId, workspaceId: "p1", log });
+    const { records } = await runToCompletion(adapter, session);
+    const start = records.find((record) => record.eventType === EventType.TEXT_MESSAGE_START);
+    check("Pi message id is used for TEXT_MESSAGE_START", start.payload.messageId === "pi-msg-42", start.payload.messageId);
+  }
+
   // 2. text → tool → text
   {
     const log = new MemoryAgentEventLog({ workspaceId: "p1" });
@@ -390,7 +429,8 @@ async function testAdapter() {
         "RUN_STARTED,TEXT_MESSAGE_START,TEXT_MESSAGE_CONTENT,TEXT_MESSAGE_END,TOOL_CALL_START,TOOL_CALL_ARGS,CUSTOM,TOOL_CALL_END,TOOL_CALL_RESULT,TEXT_MESSAGE_START,TEXT_MESSAGE_CONTENT,TEXT_MESSAGE_END,RUN_FINISHED",
       typesOf(records).join(","),
     );
-    check("tool progress is a CUSTOM event", records.find((record) => record.eventType === EventType.CUSTOM).payload.name === "pi.tool_progress");
+    const progress = records.find((record) => record.eventType === EventType.CUSTOM).payload;
+    check("tool progress is a CUSTOM event", progress.name === "pi.tool_progress" && progress.value.content === "第一段");
     check("tool result content is carried", records.find((record) => record.eventType === EventType.TOOL_CALL_RESULT).payload.content === "内容");
     check(
       "two distinct text message ids",
@@ -527,6 +567,42 @@ async function testAdapter() {
     check("sync prompt error is RUN_ERROR", records.at(-1).eventType === EventType.RUN_ERROR);
   }
 
+  // 6d. agent_settled followed by a prompt rejection is RUN_ERROR, not RUN_FINISHED
+  {
+    const log = new MemoryAgentEventLog({ workspaceId: "p1" });
+    const session = new FakePiSession({
+      script: async ({ emit }) => {
+        emit({ type: "agent_start" });
+        emit({ type: "agent_settled", aborted: false });
+        throw new Error("run exploded after settle");
+      },
+    });
+    const adapter = new PiAgUiAdapter({ session, threadId: session.sessionId, workspaceId: "p1", log });
+    const started = await adapter.runPrompt("hi");
+    await session.lastRun.catch(() => {});
+    await waitFor(() => !adapter.isRunning, { label: "settled error run" });
+    const records = log.records.filter((record) => record.runId === started.runId);
+    assertRunInvariants("settled error", records);
+    check(
+      "settle followed by rejection is RUN_ERROR",
+      records.at(-1).eventType === EventType.RUN_ERROR && records.at(-1).payload.message.includes("run exploded"),
+      typesOf(records).join(","),
+    );
+  }
+
+  // 6e. a prompt that does not return a promise must not leave a stuck run
+  {
+    const log = new MemoryAgentEventLog({ workspaceId: "p1" });
+    const session = new FakePiSession({ script: async () => {} });
+    session.prompt = () => undefined;
+    const adapter = new PiAgUiAdapter({ session, threadId: "t-void", workspaceId: "p1", log });
+    const started = await adapter.runPrompt("hi");
+    const records = log.records.filter((record) => record.runId === started.runId);
+    assertRunInvariants("prompt void", records);
+    check("a void prompt becomes RUN_ERROR", records.at(-1).eventType === EventType.RUN_ERROR);
+    check("a void prompt does not leave an active run", adapter.isRunning === false);
+  }
+
   // 7. abort closes the run and stops streaming
   {
     const log = new MemoryAgentEventLog({ workspaceId: "p1" });
@@ -559,6 +635,48 @@ async function testAdapter() {
     check("adapter idle after abort", adapter.isRunning === false);
   }
 
+  // 7b. abort stops the stream immediately, before Pi finishes settling
+  {
+    const log = new MemoryAgentEventLog({ workspaceId: "p1" });
+    const session = new FakePiSession({
+      script: async ({ emit, session: self }) => {
+        emit({ type: "agent_start" });
+        const message = assistantMessage();
+        emit({ type: "message_start", message });
+        emit(delta(message, "before"));
+        await self.pause();
+        emit(delta(message, "after-resume"));
+        emit({ type: "message_end", message });
+        emit({ type: "agent_settled", aborted: false });
+      },
+    });
+    // Slow abort: the session takes 30ms to report settlement.
+    session.abort = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      session.emit({ type: "agent_settled", aborted: true });
+    };
+    const adapter = new PiAgUiAdapter({ session, threadId: "t-abort2", workspaceId: "p1", log });
+    const started = await adapter.runPrompt("长任务");
+    await waitFor(() => log.records.length >= 3, { label: "abort deltas" });
+    const aborting = adapter.abort();
+    const countAtAbort = log.records.length;
+    session.emit(delta({ role: "assistant", content: [], stopReason: "stop", timestamp: Date.now() }, "during-abort"));
+    check("events after abort request are dropped immediately", log.records.length === countAtAbort);
+    await aborting;
+    session.resume();
+    await session.lastRun.catch(() => {});
+    const records = log.records.filter((record) => record.runId === started.runId);
+    assertRunInvariants("abort-immediate", records);
+    const afterAbort = records.slice(countAtAbort).map((record) => record.eventType);
+    check(
+      "only balance and terminal events follow an abort request",
+      afterAbort.join(",") === "TEXT_MESSAGE_END,RUN_FINISHED",
+      afterAbort.join(","),
+    );
+    check("no content is written after the abort request", !records.some((record) => ["during-abort", "after-resume"].includes(record.payload.delta)));
+    check("abort ends with RUN_FINISHED(aborted)", records.at(-1).eventType === EventType.RUN_FINISHED && records.at(-1).payload.result?.aborted === true);
+  }
+
   // 8. adapter exception → RUN_ERROR
   {
     const log = new MemoryAgentEventLog({ workspaceId: "p1" });
@@ -574,6 +692,44 @@ async function testAdapter() {
     assertRunInvariants("adapter exception", records);
     check("adapter exception becomes RUN_ERROR", records.at(-1).eventType === EventType.RUN_ERROR);
     check("adapter stays alive after the error", adapter.isRunning === false);
+  }
+
+  // 8b. a terminal event that cannot be persisted still reaches live clients
+  {
+    const memory = new MemoryAgentEventLog({ workspaceId: "p1" });
+    const brokenLog = {
+      append(args) {
+        if (args.eventType === EventType.RUN_FINISHED) throw new Error("disk full");
+        return memory.append(args);
+      },
+      locate: (eventId) => memory.locate(eventId),
+      list: (options) => memory.list(options),
+      records: memory.records,
+    };
+    const session = new FakePiSession({
+      script: async ({ emit }) => {
+        emit({ type: "agent_start" });
+        const message = assistantMessage();
+        emit({ type: "message_start", message });
+        emit(delta(message, "ok"));
+        message.content = [{ type: "text", text: "ok" }];
+        emit({ type: "message_end", message });
+        emit({ type: "agent_settled", aborted: false });
+      },
+    });
+    const adapter = new PiAgUiAdapter({ session, threadId: "t-disk", workspaceId: "p1", log: brokenLog });
+    const seen = [];
+    adapter.subscribeEvents((record) => seen.push(record));
+    await adapter.runPrompt("hi");
+    await session.lastRun;
+    await waitFor(() => !adapter.isRunning, { label: "disk failure settle" });
+    const terminal = seen.at(-1);
+    check(
+      "terminal frame is delivered when persistence fails",
+      terminal?.eventType === EventType.RUN_FINISHED && terminal.persisted === false && terminal.eventId === null,
+      JSON.stringify({ type: terminal?.eventType, persisted: terminal?.persisted }),
+    );
+    check("unpersisted terminal is not replayed", memory.records.every((record) => record.eventType !== EventType.RUN_FINISHED));
   }
 
   // 9. one run at a time per thread
@@ -901,6 +1057,98 @@ async function testReplay() {
     );
   }
 
+  // A terminal whose log write fails must still reach the SSE client.
+  {
+    const memory = new MemoryAgentEventLog({ workspaceId: "p1" });
+    const brokenLog = {
+      append(args) {
+        if (args.eventType === EventType.RUN_FINISHED) throw new Error("disk full");
+        return memory.append(args);
+      },
+      locate: (eventId) => memory.locate(eventId),
+      list: (options) => memory.list(options),
+      records: memory.records,
+    };
+    const fake = new FakePiSession({
+      script: async ({ emit }) => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        emit({ type: "agent_start" });
+        const message = assistantMessage();
+        emit({ type: "message_start", message });
+        emit(delta(message, "ok"));
+        message.content = [{ type: "text", text: "ok" }];
+        emit({ type: "message_end", message });
+        emit({ type: "agent_settled", aborted: false });
+      },
+    });
+    const adapter = new PiAgUiAdapter({ session: fake, threadId: "t-disk-sse", workspaceId: "p1", log: brokenLog });
+    adapter.attach();
+    const started = await adapter.runPrompt("hi");
+    const res = new FakeResponse();
+    await streamAgUiEvents({
+      req: new FakeRequest(),
+      res,
+      log: brokenLog,
+      threadId: "t-disk-sse",
+      runId: started.runId,
+      subscribe: (listener) => adapter.subscribeEvents(listener),
+      isRunActive: (run) => adapter.isRunning && (!run || adapter.activeRunId === run),
+    });
+    await fake.lastRun;
+    await waitFor(() => res.writableEnded, { label: "volatile terminal" });
+    const last = res.events.at(-1);
+    check("volatile terminal reaches the SSE client", last.data.type === EventType.RUN_FINISHED, last.data.type);
+    check("volatile terminal has no id", last.id === null);
+    check("volatile terminal is marked persisted=false", last.data.persisted === false);
+    check("volatile terminal closes the stream", res.writableEnded === true);
+    check("volatile terminal is not replayed", memory.records.every((record) => record.eventType !== EventType.RUN_FINISHED));
+  }
+
+  // A volatile terminal also closes a thread (connect) stream.
+  {
+    const memory = new MemoryAgentEventLog({ workspaceId: "p1" });
+    const brokenLog = {
+      append(args) {
+        if (args.eventType === EventType.RUN_FINISHED) throw new Error("disk full");
+        return memory.append(args);
+      },
+      locate: (eventId) => memory.locate(eventId),
+      list: (options) => memory.list(options),
+      records: memory.records,
+    };
+    const fake = new FakePiSession({
+      script: async ({ emit }) => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        emit({ type: "agent_start" });
+        const message = assistantMessage();
+        emit({ type: "message_start", message });
+        emit(delta(message, "ok"));
+        message.content = [{ type: "text", text: "ok" }];
+        emit({ type: "message_end", message });
+        emit({ type: "agent_settled", aborted: false });
+      },
+    });
+    const adapter = new PiAgUiAdapter({ session: fake, threadId: "t-disk-connect", workspaceId: "p1", log: brokenLog });
+    adapter.attach();
+    await adapter.runPrompt("hi");
+    const res = new FakeResponse();
+    await streamAgUiEvents({
+      req: new FakeRequest(),
+      res,
+      log: brokenLog,
+      threadId: "t-disk-connect",
+      runId: null,
+      subscribe: (listener) => adapter.subscribeEvents(listener),
+      isRunActive: () => adapter.isRunning,
+    });
+    await fake.lastRun;
+    await waitFor(() => res.writableEnded, { label: "connect volatile terminal" });
+    const last = res.events.at(-1);
+    check("connect stream gets the volatile terminal", last.data.type === EventType.RUN_FINISHED, last.data.type);
+    check("connect volatile terminal has no id", last.id === null);
+    check("connect volatile terminal is marked persisted=false", last.data.persisted === false);
+  }
+
   // A run registered before agent_start must not be treated as finished.
   {
     const fake = new FakePiSession({
@@ -938,6 +1186,95 @@ async function testReplay() {
         "RUN_STARTED,TEXT_MESSAGE_START,TEXT_MESSAGE_CONTENT,TEXT_MESSAGE_END,RUN_FINISHED",
       res.events.map((event) => event.data.type).join(","),
     );
+  }
+
+  // connect replays every run on the thread, not just the first one
+  {
+    const log = new MemoryAgentEventLog({ workspaceId: "p1" });
+    const append = (runId, type, extra = {}) =>
+      log.append({ threadId: "t-multi", runId, eventType: type, event: { type, threadId: "t-multi", runId, ...extra } });
+    append("r1", EventType.RUN_STARTED);
+    append("r1", EventType.RUN_FINISHED);
+    append("r2", EventType.RUN_STARTED);
+    append("r2", EventType.TEXT_MESSAGE_CONTENT, { delta: "second" });
+    const last = append("r2", EventType.RUN_FINISHED);
+    const res = new FakeResponse();
+    await streamAgUiEvents({
+      req: new FakeRequest(),
+      res,
+      log,
+      threadId: "t-multi",
+      runId: null,
+      subscribe: () => () => {},
+      isRunActive: () => false,
+    });
+    check("connect replays every run on the thread", res.events.length === 5, String(res.events.length));
+    check("connect does not stop at a historical terminal", res.events.at(-1).id === last.eventId);
+    check("connect closes once the thread is idle", res.writableEnded === true);
+  }
+
+  // A live terminal on a thread stream closes it and releases the subscription
+  {
+    const log = new MemoryAgentEventLog({ workspaceId: "p1" });
+    const listeners = new Set();
+    const started = log.append({
+      threadId: "t-live2",
+      runId: "r-live2",
+      eventType: EventType.RUN_STARTED,
+      event: { type: EventType.RUN_STARTED, threadId: "t-live2", runId: "r-live2" },
+    });
+    let active = true;
+    const res = new FakeResponse();
+    await streamAgUiEvents({
+      req: new FakeRequest(),
+      res,
+      log,
+      threadId: "t-live2",
+      runId: null,
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      isRunActive: () => active,
+      pingMs: 100000,
+    });
+    check("open thread stream holds one subscription", listeners.size === 1);
+    active = false; // the run just reached its terminal event
+    const terminal = log.append({
+      threadId: "t-live2",
+      runId: "r-live2",
+      eventType: EventType.RUN_FINISHED,
+      event: { type: EventType.RUN_FINISHED, threadId: "t-live2", runId: "r-live2" },
+    });
+    for (const listener of [...listeners]) listener(terminal);
+    check("live terminal closes the thread stream", res.writableEnded === true);
+    check("live terminal releases the subscription", listeners.size === 0);
+    check("live terminal is written once", res.events.filter((event) => event.id === terminal.eventId).length === 1);
+    check("historical start is still replayed first", res.events[0].id === started.eventId);
+  }
+
+  // Client disconnect releases the subscription
+  {
+    const log = new MemoryAgentEventLog({ workspaceId: "p1" });
+    const listeners = new Set();
+    const res = new FakeResponse();
+    await streamAgUiEvents({
+      req: new FakeRequest(),
+      res,
+      log,
+      threadId: "t-drop",
+      runId: null,
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      isRunActive: () => true,
+      pingMs: 100000,
+    });
+    check("stream subscribes while open", listeners.size === 1);
+    res.emit("close"); // what Node does when the client goes away
+    check("client disconnect releases the subscription", listeners.size === 0);
+    check("client disconnect ends the response", res.writableEnded === true);
   }
 
   // Connect with no active run and no events just closes.
@@ -1009,34 +1346,135 @@ async function testReplay() {
   }
 }
 
-function testRunInput() {
+async function testRealSseTeardown() {
+  section("real HTTP SSE teardown");
+
+  const log = new MemoryAgentEventLog({ workspaceId: "p1" });
+  log.append({
+    threadId: "t-real",
+    runId: "r-real",
+    eventType: EventType.RUN_STARTED,
+    event: { type: EventType.RUN_STARTED, threadId: "t-real", runId: "r-real" },
+  });
+  const listeners = new Set();
+  let unsubscribed;
+  const unsubscribedOnce = new Promise((resolve) => {
+    unsubscribed = resolve;
+  });
+
+  const server = http.createServer(async (req, res) => {
+    req.resume();
+    await once(req, "end").catch(() => {});
+    await streamAgUiEvents({
+      req,
+      res,
+      log,
+      threadId: "t-real",
+      runId: null,
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+          unsubscribed();
+        };
+      },
+      isRunActive: () => true,
+      pingMs: 100000,
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+
+  try {
+    const controller = new AbortController();
+    const response = await fetch(`http://127.0.0.1:${port}/api/ag-ui/agent/pi/connect`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ threadId: "t-real" }),
+      signal: controller.signal,
+    });
+    const reader = response.body.getReader();
+    const first = await reader.read();
+    const chunk = new TextDecoder().decode(first.value);
+    check("real SSE writes id and data", chunk.includes("id: evt_r-real_000001") && chunk.includes('"type":"RUN_STARTED"'));
+    check("real SSE holds one subscription while open", listeners.size === 1);
+    controller.abort();
+    await Promise.race([unsubscribedOnce, new Promise((resolve) => setTimeout(resolve, 2000))]);
+    check("a real client abort releases the subscription", listeners.size === 0, String(listeners.size));
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function testRunInput() {
   section("run input");
 
-  const ctx = { id: "p1", root: "/tmp/project-p1" };
-  const base = normalizeRunInput(
-    {
-      threadId: "thread-1",
-      messages: [{ id: "m1", role: "user", content: "分析这份报告" }],
-      forwardedProps: { projectId: "p1", attachments: ["uploads/a.md", "../escape.md", "/etc/passwd"] },
-    },
-    ctx,
-  );
-  check("prompt comes from the last user message", base.prompt.startsWith("分析这份报告"));
-  check("attachments are appended", base.prompt.includes("[已上传资料]") && base.prompt.includes("- uploads/a.md"));
-  check("path escapes are dropped", !base.prompt.includes("escape.md") && !base.prompt.includes("passwd"));
-  check("threadId is passed through", base.threadId === "thread-1");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pe-agui-input-"));
+  const ctx = { id: "p1", root };
+  try {
+    fs.mkdirSync(path.join(root, "uploads"), { recursive: true });
+    fs.writeFileSync(path.join(root, "uploads", "a.md"), "a");
+    fs.writeFileSync(path.join(root, "uploads", "b.md"), "b");
+    let symlinkCreated = false;
+    try {
+      fs.symlinkSync("/etc/passwd", path.join(root, "uploads", "leak.md"));
+      symlinkCreated = true;
+    } catch {
+      /* symlinks unavailable on this filesystem */
+    }
 
-  const mismatch = normalizeRunInput({ messages: [{ role: "user", content: "hi" }], forwardedProps: { projectId: "p2" } }, ctx);
-  check("project mismatch is rejected", mismatch.ok === false && mismatch.status === 403);
+    const base = normalizeRunInput(
+      {
+        threadId: "thread-1",
+        messages: [{ id: "m1", role: "user", content: "分析这份报告" }],
+        forwardedProps: {
+          projectId: "p1",
+          attachments: [
+            "uploads/a.md",
+            "uploads/missing.md",
+            "uploads/leak.md",
+            "../escape.md",
+            "/etc/passwd",
+            path.join(root, "uploads", "b.md"),
+          ],
+        },
+      },
+      ctx,
+    );
+    check("prompt comes from the last user message", base.prompt.startsWith("分析这份报告"));
+    check("attachments are appended", base.prompt.includes("[已上传资料]") && base.prompt.includes("- uploads/a.md"));
+    check("absolute paths inside the project are normalised", base.attachments.includes("uploads/b.md"), base.attachments.join(","));
+    check("missing attachments are dropped", !base.attachments.includes("uploads/missing.md"));
+    check("path escapes are dropped", !base.prompt.includes("escape.md") && !base.prompt.includes("passwd"));
+    if (symlinkCreated) {
+      check("symlinks escaping the project are rejected", !base.attachments.includes("uploads/leak.md"), base.attachments.join(","));
+    }
+    check("threadId is passed through", base.threadId === "thread-1");
 
-  const empty = normalizeRunInput({ messages: [] }, ctx);
-  check("empty prompt is rejected", empty.ok === false && empty.status === 400);
+    const mismatch = normalizeRunInput({ messages: [{ role: "user", content: "hi" }], forwardedProps: { projectId: "p2" } }, ctx);
+    check("project mismatch is rejected", mismatch.ok === false && mismatch.status === 403);
 
-  const arrayContent = normalizeRunInput(
-    { messages: [{ role: "assistant", content: "x" }, { role: "user", content: [{ type: "text", text: "第二条" }] }] },
-    ctx,
-  );
-  check("array content is flattened", arrayContent.prompt === "第二条");
+    const empty = normalizeRunInput({ messages: [] }, ctx);
+    check("empty prompt is rejected", empty.ok === false && empty.status === 400);
+
+    // readBodyJson keeps 413 and maps JSON parse errors to 400.
+    const oversized = readBodyJson({}, async () => {
+      throw Object.assign(new Error("payload too large"), { status: 413 });
+    });
+    check(
+      "oversized bodies keep 413",
+      await oversized.then(() => false, (error) => error.status === 413),
+    );
+    const malformed = readBodyJson({}, async () => {
+      throw new SyntaxError("Unexpected token");
+    });
+    check(
+      "malformed JSON becomes 400",
+      await malformed.then(() => false, (error) => error.status === 400),
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 }
 
 /* ---------- endpoint routing ---------- */
@@ -1080,7 +1518,10 @@ async function testEndpointRoutes() {
 
   const log = new MemoryAgentEventLog({ workspaceId: "p1" });
   const adapter = new FakeAgUiAdapter();
-  const ctx = { id: "p1", root: "/tmp/project-p1", agentEvents: log };
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pe-agui-endpoint-"));
+  fs.mkdirSync(path.join(projectRoot, "uploads"), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, "uploads", "spec.md"), "# spec");
+  const ctx = { id: "p1", root: projectRoot, agentEvents: log };
   const entries = new Map([["thread-1", { id: "thread-1", agui: adapter }]]);
   const deps = {
     ctx,
@@ -1150,6 +1591,17 @@ async function testEndpointRoutes() {
     const res = new FakeResponse();
     await handleAgUiRequest(request("POST", {}), res, new URL("http://x/api/ag-ui/agent/pi/connect"), deps);
     check("connect requires a threadId", res.statusCode === 400);
+  }
+
+  {
+    const res = new FakeResponse();
+    await handleAgUiRequest(
+      request("POST", { threadId: "thread-1", forwardedProps: { projectId: "p2" } }),
+      res,
+      new URL("http://x/api/ag-ui/agent/pi/connect"),
+      deps,
+    );
+    check("connect rejects a foreign projectId", res.statusCode === 403);
   }
 
   // connect attaches to a live run, streams, and closes on the terminal event
@@ -1238,6 +1690,8 @@ async function testEndpointRoutes() {
     await handleAgUiRequest(request("POST"), res, new URL("http://x/api/ag-ui/agent/pi/stop/ghost"), deps);
     check("stop 404s for an unknown thread", res.statusCode === 404);
   }
+
+  fs.rmSync(projectRoot, { recursive: true, force: true });
 }
 
 /* ---------- legacy server regression ---------- */
@@ -1407,6 +1861,15 @@ async function testLegacyServer() {
     });
     check("run rejects a mismatched projectId", mismatch.status === 403);
 
+    const badJson = await fetch(`${base}/api/ag-ui/agent/pi/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{not json",
+      signal: AbortSignal.timeout(10000),
+    });
+    check("run rejects malformed JSON with 400", badJson.status === 400, String(badJson.status));
+    await badJson.text();
+
     const emptyRun = await getJson(`${base}/api/ag-ui/agent/pi/run`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -1435,7 +1898,8 @@ try {
   await testAdapter();
   await testSqliteLog();
   await testReplay();
-  testRunInput();
+  await testRunInput();
+  await testRealSseTeardown();
   await testEndpointRoutes();
   await testLegacyServer();
 } catch (error) {
