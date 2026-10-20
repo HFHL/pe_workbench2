@@ -26,7 +26,10 @@
     "test:approvals": "node scripts/test-approvals.mjs",
     "test:server": "node scripts/test-server-modules.mjs",
     "test:e2e": "python3 scripts/test-e2e.py",
-    "test:p1": "node scripts/test-tool-contracts.mjs && node scripts/test-approvals.mjs && node scripts/test-server-modules.mjs && node scripts/test-protocol.mjs"
+    "test:p1": "node scripts/test-tool-contracts.mjs && node scripts/test-approvals.mjs && node scripts/test-server-modules.mjs && node scripts/test-protocol.mjs",
+    "test:dashboard": "node scripts/test-dashboard.mjs && python3 scripts/test-dashboard-e2e.py",
+    "test:dashboard:node": "node scripts/test-dashboard.mjs",
+    "test:dashboard:e2e": "python3 scripts/test-dashboard-e2e.py"
   },
   "keywords": [],
   "author": "",

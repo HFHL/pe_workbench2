@@ -1279,6 +1279,17 @@ export class Store {
     ).get(id, this.projectId) || null;
   }
 
+  /** Raw run rows (newest first) for read-only historical views. */
+  listTrackingRuns(trackingId, limit = 50) {
+    return this.db.prepare(
+      `select tr.* from tracking_runs tr
+       join trackings t on t.id = tr.tracking_id
+       where tr.tracking_id = ? and t.workspace_id = ?
+       order by tr.started_at desc
+       limit ?`,
+    ).all(trackingId, this.projectId, Math.max(1, Math.min(200, Number(limit) || 50)));
+  }
+
   getTrackingRow(id) {
     return this.db.prepare(`select * from trackings where id = ? and workspace_id = ?`).get(id, this.projectId);
   }

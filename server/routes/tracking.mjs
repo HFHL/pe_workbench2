@@ -7,6 +7,35 @@ export async function handleTracking({ req, res, url, app, ctx }) {
   const { json, readJson } = app.http;
   const { runTracking, readTrackingState, writeTrackingState, syncSourceBindings, pollSourceBinding, broadcastTracking, broadcastPlan, broadcastGlobal, withAsr, prepareWorkingModel, TRACKING_TEMPLATES, normalizeSchedule, templateForFile, computeNextCheck, deriveMonitorPlan, normalizeMonitorItem, validateMonitorPlan, triageSourceEvent, nowIso } = app;
   const pathname = url.pathname;
+
+  // Read-only investment dashboard. The response is validated against
+  // pe.investment-dashboard@v1 before it leaves the service.
+  const dashboardMatch = pathname.match(/^\/api\/trackings\/([^/]+)(?:\/runs\/([^/]+))?\/dashboard$/);
+  if (dashboardMatch) {
+    if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+    let trackingId;
+    let runId = null;
+    try {
+      trackingId = decodeURIComponent(dashboardMatch[1]);
+      runId = dashboardMatch[2] ? decodeURIComponent(dashboardMatch[2]) : null;
+    } catch {
+      return json(res, 400, { error: "invalid dashboard id" });
+    }
+    try {
+      const dashboard = ctx.dashboard.build({
+        projectId: ctx.id,
+        trackingId,
+        runId,
+        materialVersion: url.searchParams.get("materialVersion"),
+      });
+      return json(res, 200, dashboard);
+    } catch (error) {
+      return json(res, error.status || 500, {
+        error: error.message || "dashboard build failed",
+        ...(error.code ? { code: error.code } : {}),
+      });
+    }
+  }
   if (pathname === "/api/trackings") {
     if (req.method === "GET") return json(res, 200, ctx.store.listTrackings());
     if (req.method === "POST") {

@@ -22,6 +22,7 @@ import { createTrackingTool } from "../lib/tracking-tool.mjs";
 import { AgentEventLog } from "../lib/agent-protocol/event-log.mjs";
 import { applyModelChanges } from "../lib/model-writer.mjs";
 import { createApprovalService } from "../lib/approvals/service.mjs";
+import { createDashboardService } from "./dashboard/service.mjs";
 
 export async function ensureProjectDirs(root) {
   const dirs = ["exports", "inputs", "uploads", ".tracking", ".pi/sessions", ".agents/skills"];
@@ -157,6 +158,7 @@ export function createProjectManager({
       libreOfficeAvailable: Boolean(config.calcInfo.available),
       broadcast: (event) => bus.broadcastGlobal(event, ctx.id),
     });
+    ctx.dashboard = createDashboardService({ store, root: projectRoot });
     contexts.set(ctx.id, ctx);
     asr?.boot();
     return ctx;
