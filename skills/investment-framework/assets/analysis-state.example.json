@@ -1,0 +1,446 @@
+{
+  "schema_version": "2.0",
+  "framework_id": "IF-EXAMPLE-MEMORY",
+  "revision": 1,
+  "stage": "reviewed",
+  "subject": {
+    "company": "示例存储科技",
+    "security": "688000.SS",
+    "currency": "CNY",
+    "units": "百万元",
+    "model_as_of": "2026-09-01",
+    "model_file": "uploads/example-model-20260901.xlsx",
+    "model_fingerprint": "sha256:5f2c9a1d7e3b",
+    "valuation_date": "2026-09-01",
+    "market_price_date": "2026-10-18",
+    "actuals_through": "2026-06-30",
+    "forecast_start": "2026-07-01",
+    "data_cutoff": "2026-10-18",
+    "horizon": "12–18 个月"
+  },
+  "model": {
+    "understanding": {
+      "revenue": "收入按 DRAM 位元出货量 × 单价（美元/Gb）× 汇率预测；出货量由产能 × 稼动率 × 良率推出，2027 年产能是直接设定值。",
+      "costs_profit": "成本以单位现金成本 × 出货量汇总，毛利率为计算结果而非直接输入；费用按收入比例设定，税率沿用 15% 高新企业税率。",
+      "cash_flow": "资本开支按产能建设计划单列，折旧按存量资产与新增资本开支分别计提；营运资金按收入增速的 20% 估算。",
+      "valuation": "2027E EPS × 目标 PE 18x，再按 12% 折现率折回估值日；目标 PE 为直接设定，没有同业分位推导。"
+    },
+    "checks": [
+      {
+        "id": "CHK1",
+        "item": "2027E 收入 = 出货量 × 单价 × 汇率",
+        "result": "pass",
+        "note": "抽样复算差异 0.2%，来自四舍五入"
+      },
+      {
+        "id": "CHK2",
+        "item": "经营现金流与净利润、营运资金变动勾稽",
+        "result": "difference",
+        "note": "模型未扣少数股东权益，差异 3.1 亿元，已保留"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "id": "SRC1",
+      "name": "示例存储 2027 年盈利预测模型",
+      "locator": "uploads/example-model-20260901.xlsx",
+      "published_at": "2026-09-01",
+      "accessed_at": "2026-10-19"
+    },
+    {
+      "id": "SRC2",
+      "name": "TrendForce DRAM 合约价月报",
+      "locator": "https://www.trendforce.com/price",
+      "published_at": "2026-10-15",
+      "accessed_at": "2026-10-18"
+    },
+    {
+      "id": "SRC3",
+      "name": "公司 2026 年半年报",
+      "locator": "巨潮资讯 2026-08-28 公告",
+      "published_at": "2026-08-28",
+      "accessed_at": "2026-10-19"
+    },
+    {
+      "id": "SRC4",
+      "name": "卖方一致预期汇总（3 家）",
+      "locator": "内部整理，原始研报见附件",
+      "published_at": "2026-10-10",
+      "accessed_at": "2026-10-18"
+    }
+  ],
+  "evidence": [
+    {
+      "id": "E1",
+      "source_ids": [
+        "SRC1"
+      ],
+      "statement": "模型设定 2027 年 DRAM 单价同比 +35%，为直接输入。",
+      "kind": "model_input",
+      "period": "2027E",
+      "locator": "Assumptions!C18",
+      "limitations": "模型未记录选值理由"
+    },
+    {
+      "id": "E2",
+      "source_ids": [
+        "SRC2"
+      ],
+      "statement": "渠道 DRAM 库存 9.2 周，连续两个月上升。",
+      "kind": "external",
+      "period": "2026-09",
+      "locator": "月报第 3 页",
+      "limitations": "样本为渠道，不含原厂"
+    },
+    {
+      "id": "E3",
+      "source_ids": [
+        "SRC2"
+      ],
+      "statement": "DDR5 8Gb 合约价 9 月环比 +4%，连续 5 个月上涨。",
+      "kind": "market",
+      "period": "2026-09",
+      "locator": "合约价表",
+      "limitations": "主流料号，不代表高容量产品"
+    },
+    {
+      "id": "E4",
+      "source_ids": [
+        "SRC3"
+      ],
+      "statement": "公司公告 2027 年底产能规划 320kwpm，2026 年底为 240kwpm。",
+      "kind": "actual",
+      "period": "2027E",
+      "locator": "半年报第 18 页",
+      "limitations": "规划值，可能延期"
+    },
+    {
+      "id": "E5",
+      "source_ids": [
+        "SRC3"
+      ],
+      "statement": "国内服务器客户招标份额 28%，较去年提升 4pct。",
+      "kind": "actual",
+      "period": "2026H1",
+      "locator": "半年报第 22 页",
+      "limitations": "仅覆盖前五大客户"
+    },
+    {
+      "id": "E6",
+      "source_ids": [
+        "SRC4"
+      ],
+      "statement": "卖方对 2027E EPS 的中位数为 5.2 元。",
+      "kind": "consensus",
+      "period": "2027E",
+      "locator": "汇总表第 2 行",
+      "limitations": "仅 3 家，发布时间不一"
+    }
+  ],
+  "assumptions": [
+    {
+      "id": "A1",
+      "statement": "2027 年 DRAM 单价同比 +35%",
+      "value": 0.35,
+      "unit": "%",
+      "period": "2027E",
+      "kind": "model_input",
+      "evidence_ids": [
+        "E1"
+      ],
+      "operating_conditions": "AI 服务器需求维持、原厂供给纪律不瓦解",
+      "status": "active"
+    },
+    {
+      "id": "A2",
+      "statement": "2027 年底产能 320kwpm",
+      "value": 320,
+      "unit": "kwpm",
+      "period": "2027E",
+      "kind": "model_input",
+      "evidence_ids": [
+        "E4"
+      ],
+      "operating_conditions": "设备交付与良率爬坡按计划",
+      "status": "active"
+    },
+    {
+      "id": "A3",
+      "statement": "2027 年毛利率 45%",
+      "value": 0.45,
+      "unit": "%",
+      "period": "2027E",
+      "kind": "model_forecast",
+      "evidence_ids": [
+        "E1"
+      ],
+      "operating_conditions": "单价上行覆盖单位成本上升",
+      "status": "active"
+    }
+  ],
+  "theses": [
+    {
+      "id": "T1",
+      "statement": "AI 服务器需求推动 DRAM 周期上行，2027 年 ASP 与毛利率同时超预期。",
+      "mechanism": "AI 服务器单机 DRAM 用量提升 → 供需缺口扩大 → 合约价上涨 → 毛利率与 EPS 上行 → 估值修复。",
+      "horizon": "12–24 个月",
+      "assumption_ids": [
+        "A1",
+        "A3"
+      ],
+      "support_ids": [
+        "E1",
+        "E3"
+      ],
+      "counter_ids": [
+        "E2"
+      ],
+      "alternatives": "库存上升可能来自渠道备货而非需求转弱；也可能是原厂主动补库。",
+      "unknowns": "HBM 认证进度、原厂 2027 年资本开支计划",
+      "confidence": "medium",
+      "confidence_reason": "价格与需求证据方向一致，但库存开始上升，且模型未记录 ASP 假设依据。",
+      "status": "active"
+    },
+    {
+      "id": "T2",
+      "statement": "国产替代带来国内客户份额提升，降低周期波动。",
+      "mechanism": "国内服务器厂商供应链本地化 → 公司招标份额提升 → 出货量增速高于行业。",
+      "horizon": "18–36 个月",
+      "assumption_ids": [
+        "A2"
+      ],
+      "support_ids": [
+        "E4",
+        "E5"
+      ],
+      "counter_ids": [
+        "E5"
+      ],
+      "alternatives": "份额提升可能来自降价换量，而非产品力。",
+      "unknowns": "主要客户的国产化比例目标",
+      "confidence": "low",
+      "confidence_reason": "只有半年报口径的份额数据，样本覆盖前五大客户，无法区分价格与产品力。",
+      "status": "active"
+    }
+  ],
+  "sensitivities": [
+    {
+      "id": "S1",
+      "assumption_ids": [
+        "A1"
+      ],
+      "method": "model_input",
+      "baseline": "2027 ASP 同比 +35%",
+      "perturbation": "±10%（+25% / +45%）",
+      "result": "ASP +10% → 2027E EPS +21%，base 目标价 +18 元；-10% → -17 元",
+      "affects": [
+        "V1"
+      ],
+      "evidence_ids": [
+        "E1"
+      ],
+      "fixed_conditions": "产能、毛利率、税率、目标 PE 不变",
+      "limitations": "只测单价单变量，未与产能或成本联动"
+    },
+    {
+      "id": "S2",
+      "assumption_ids": [
+        "A2"
+      ],
+      "method": "model_input",
+      "baseline": "2027 年底产能 320kwpm",
+      "perturbation": "-10%（288kwpm）",
+      "result": "2027E 收入 -6.2%，EPS -9.4%，base 目标价 -8 元",
+      "affects": [
+        "V1"
+      ],
+      "evidence_ids": [
+        "E4"
+      ],
+      "fixed_conditions": "单价、毛利率不变",
+      "limitations": "产能延期同时会影响折旧与单位成本，本次未联动"
+    },
+    {
+      "id": "S3",
+      "assumption_ids": [
+        "A1"
+      ],
+      "method": "price_condition",
+      "baseline": "2027E EPS 5.2 元、PE 18x",
+      "perturbation": "PE 15x / 20x",
+      "result": "15x → 78 元；20x → 104 元",
+      "affects": [
+        "V1"
+      ],
+      "evidence_ids": [
+        "E6"
+      ],
+      "fixed_conditions": "EPS 固定为 5.2 元",
+      "limitations": "价格条件对照，不解释经营假设如何产生 EPS"
+    }
+  ],
+  "valuations": [
+    {
+      "id": "V1",
+      "scenario": "base",
+      "method": "PE",
+      "as_of": "2026-09-01",
+      "value": 92,
+      "unit": "元/股",
+      "assumption_ids": [
+        "A1",
+        "A2",
+        "A3"
+      ],
+      "thesis_ids": [
+        "T1",
+        "T2"
+      ],
+      "evidence_ids": [
+        "E1",
+        "E4"
+      ],
+      "formula": "2027E EPS 5.2 元 × 目标 PE 18x，按 12% 折现 12 个月",
+      "limitations": "目标 PE 为模型直接设定，未做同业分位验证"
+    },
+    {
+      "id": "V2",
+      "scenario": "bear",
+      "method": "PE",
+      "as_of": "2026-09-01",
+      "value": 65,
+      "unit": "元/股",
+      "assumption_ids": [
+        "A1",
+        "A3"
+      ],
+      "thesis_ids": [
+        "T1"
+      ],
+      "evidence_ids": [
+        "E1",
+        "E2"
+      ],
+      "formula": "ASP +10%、毛利率 38%、PE 14x",
+      "limitations": "压力情景，不是价值底线"
+    },
+    {
+      "id": "V3",
+      "scenario": "bull",
+      "method": "PE",
+      "as_of": "2026-09-01",
+      "value": 120,
+      "unit": "元/股",
+      "assumption_ids": [
+        "A1",
+        "A2",
+        "A3"
+      ],
+      "thesis_ids": [
+        "T1",
+        "T2"
+      ],
+      "evidence_ids": [
+        "E1",
+        "E3",
+        "E5"
+      ],
+      "formula": "ASP +45%、产能 340kwpm、PE 20x",
+      "limitations": "假设 HBM 认证顺利，未有直接证据"
+    }
+  ],
+  "market": {
+    "price": 78,
+    "price_date": "2026-10-18",
+    "consensus": "2027E EPS 5.2 元（3 家中位数）",
+    "consensus_source_ids": [
+      "SRC4"
+    ],
+    "implied": "现价 78 元对应 2027E 15x PE，隐含 ASP 同比 +22%",
+    "limitations": "共识样本仅 3 家，且发布时间跨 1 个月"
+  },
+  "falsifiers": [
+    {
+      "id": "F1",
+      "thesis_id": "T1",
+      "statement": "DRAM 合约价连续两个季度环比下跌 ≥5%",
+      "metric": "DDR5 8Gb 合约价季度环比",
+      "operator": "crosses_below",
+      "threshold": "连续 2 个季度 ≤ -5%",
+      "observed": "2026-09 环比 +4%",
+      "source": "TrendForce 月报（月度）",
+      "frequency": "quarterly",
+      "warning": "单季环比 ≤ -3%",
+      "action": "核对库存与原厂稼动率；下调 A1，重算 S1 与 V1，观点降为 weakened",
+      "status": "armed",
+      "last_checked_at": "2026-10-18",
+      "last_observed": "+4% MoM"
+    },
+    {
+      "id": "F2",
+      "thesis_id": "T1",
+      "statement": "渠道 DRAM 库存超过 12 周且继续上升",
+      "metric": "渠道 DRAM 库存周数",
+      "operator": ">",
+      "threshold": "12 周，依据 2019/2022 两轮周期高点",
+      "observed": "9.2 周",
+      "source": "TrendForce 渠道库存（月度）",
+      "frequency": "monthly",
+      "warning": "10 周",
+      "action": "检查是否需求转弱；若同时价格转跌，T1 降为 invalidated",
+      "status": "armed",
+      "last_checked_at": "2026-10-18",
+      "last_observed": "9.2 周"
+    },
+    {
+      "id": "F3",
+      "thesis_id": "T2",
+      "statement": "国内服务器客户招标份额连续两个半年度低于 25%",
+      "metric": "国内前五大服务器客户 DRAM 招标份额",
+      "operator": "<",
+      "threshold": "25%，依据 2024–2026 区间下沿",
+      "observed": "28%（2026H1）",
+      "source": "公司半年报/年报（半年度）",
+      "frequency": "quarterly",
+      "warning": "27%",
+      "action": "核对是否降价换量；T2 降为 weakened，检查 A2 出货假设",
+      "status": "armed",
+      "last_checked_at": "2026-10-18",
+      "last_observed": "28%"
+    }
+  ],
+  "gaps": [
+    {
+      "id": "G1",
+      "question": "模型 2027 年 ASP +35% 的依据是什么？",
+      "impact": "若无法确认，T1 的置信度只能是 medium",
+      "evidence_needed": "分析师访谈或模型批注"
+    },
+    {
+      "id": "G2",
+      "question": "HBM 认证进度与产能分配",
+      "impact": "影响 bull 情景 V3 是否成立",
+      "evidence_needed": "客户认证公告或产业链访谈"
+    }
+  ],
+  "changes": [],
+  "tracking": {
+    "last_run_id": null,
+    "last_run_at": null,
+    "data_cutoff": "2026-10-18",
+    "thesis_status": {
+      "T1": "active",
+      "T2": "active"
+    },
+    "triggered_falsifier_ids": []
+  },
+  "review": {
+    "status": "reviewed",
+    "mode": "self",
+    "notes": [
+      "模型理解抽查 CHK1/CHK2；CHK2 差异已保留",
+      "T2 证据覆盖不足，置信度 low"
+    ]
+  }
+}

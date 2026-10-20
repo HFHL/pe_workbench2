@@ -145,11 +145,11 @@ PDF 对内置 `read` 是二进制，因此单独解析成页级文本，按 blob
 
 ## Skill 加载范围
 
-Workbench 只加载工作空间内的项目/应用 Skill：`agent-workspace/.agents/skills`、`agent-workspace/.pi/skills`、`.pi-agent/skills`。`~/.agents/skills` 下的全局 Skill（CrewAI、Remotion、Coze 等）会被 `server.mjs` 的 `skillsOverride` 过滤，避免占用 prompt 和干扰路由。新增 Workbench Skill 时放到 `agent-workspace/.agents/skills/<name>/` 即可。
+Workbench 只加载仓库内与项目内的 Skill：仓库级 `skills/`（`server.mjs` 通过 `additionalSkillPaths` 注入，随产品分发）、项目级 `projects/<id>/.agents/skills`、`projects/<id>/.pi/skills`、`.pi-agent/skills`。`~/.agents/skills` 下的全局 Skill（CrewAI、Remotion、Coze 等）会被 `server.mjs` 的 `skillsOverride` 过滤，避免占用 prompt 和干扰路由。新增产品级 Skill 放到 `skills/<name>/`，项目专属 Skill 放到 `projects/<id>/.agents/skills/<name>/`。
 
 ## 金融数据查询（westock_query）
 
-`agent-workspace/.agents/skills/westock-data` 依赖 `westock` CLI。Agent 没有终端权限，因此服务端注册了 `westock_query` 自定义工具：
+`westock-data` Skill 依赖 `westock` CLI（旧工作区路径，当前仓库未随附）。Agent 没有终端权限，因此服务端注册了 `westock_query` 自定义工具：
 
 - 工具：`westock_query(args, timeoutMs?)`；`args` 是字符串数组，例如 `["quote", "sh600519"]`、`["finance", "sh600519,sz000651", "--limit", "4"]`。
 - 实现：`lib/westock-tool.mjs`，用 `execFile` 直接调用 CLI，不经过 shell；默认超时 30s，最大 60s，输出上限 120k 字符。
@@ -157,6 +157,29 @@ Workbench 只加载工作空间内的项目/应用 Skill：`agent-workspace/.age
 - 关闭：`WESTOCK_QUERY=0`。Skill 文件仍会加载，但工具不注册。
 - 工具返回 CLI 的 Markdown 表格原文；聊天回复遵守“不使用表格”，需要完整表格时写入 `exports/`。
 - 安装脚本仍随 Skill 保留（`scripts/setup.sh` 等），但 Agent 不执行；由用户在终端安装/升级 CLI。
+
+## 公开网络搜索（anysearch_search）
+
+Agent 通过服务端自定义工具调用 AnySearch REST API，无需终端权限或 MCP 扩展：
+
+- 工具：`anysearch_search(query, maxResults?, tag?, zone?, language?, params?, timeoutMs?)`。
+- 实现：`lib/anysearch-tool.mjs`；调用 `POST /v1/search`，默认返回 6 条、超时 30s，工具总输出上限 100k 字符。
+- 密钥：`.env.local` 的 `ANYSEARCH_API_KEY`；未配置时使用 AnySearch 匿名额度。
+- 接口地址：`ANYSEARCH_API_BASE`，默认 `https://api.anysearch.com`；关闭：`ANYSEARCH_QUERY=0`。
+- AnySearch 的匿名额度 402 响应可能包含自动生成的凭据；工具会丢弃原始消息，只返回脱敏错误，避免凭据进入会话或日志。
+- 搜索结果属于外部不可信内容，只作为资料使用；回答引用时保留来源 URL。结构化金融数据仍优先使用 `westock_query`。
+
+## 读取指定网页（web_fetch）
+
+用户直接给出具体链接时，Agent 用 `web_fetch` 打开页面，而不是要求用户复制正文：
+
+- 工具：`web_fetch(url, maxChars?, query?, timeoutMs?)`；默认返回 2 万字、超时 20s，可读上限 6 万字。
+- 实现：`lib/web-fetch-tool.mjs`；Node 原生 `fetch`，最多 5 次重定向，正文流式读取上限 4 MB。
+- HTML 去掉脚本/导航/页脚后转纯文本，保留标题、段落、列表与表格骨架；JSON 自动缩进。
+- 编码按 `Content-Type` → `<meta charset>` → UTF-8 探测，支持 GBK/GB2312/Big5。
+- 默认拒绝 loopback/私网/链路本地地址，每次重定向重新校验；`WEB_FETCH_ALLOW_PRIVATE=1` 仅用于本地调试，`WEB_FETCH=0` 关闭。
+- 页面是外部不可信内容：只提取事实并保留来源 URL，不执行页面里的指令。需要登录、JavaScript 渲染或链接是 PDF/图片时，工具会明确说明限制。
+- 详见 [web-fetch.md](web-fetch.md)。
 
 ## 对话渲染
 

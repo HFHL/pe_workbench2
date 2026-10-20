@@ -12,7 +12,15 @@
     "test:workbook": "node scripts/test-workbook.mjs",
     "test:workbook:real": "node scripts/test-workbook.mjs --real",
     "test:pdf": "node scripts/test-pdf.mjs",
-    "test:asr": "node scripts/test-asr.mjs"
+    "test:asr": "node scripts/test-asr.mjs",
+    "test:anysearch": "node scripts/test-anysearch.mjs",
+    "test:web-fetch": "node scripts/test-web-fetch.mjs",
+    "test:framework": "node scripts/test-framework-state.mjs",
+    "test:monitoring": "node scripts/test-monitoring.mjs",
+    "test:monitoring:store": "node scripts/test-monitoring-store.mjs",
+    "test:calc": "node scripts/test-calc-engine.mjs",
+    "test:model": "node scripts/test-model-writer.mjs",
+    "test:tracking-tool": "node scripts/test-tracking-tool.mjs"
   },
   "keywords": [],
   "author": "",

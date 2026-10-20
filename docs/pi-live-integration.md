@@ -39,7 +39,7 @@ AgentSession  ──  pi-agent-core  ──  pi-ai  ──  https://api.deepseek
 
 - 每个会话一个 `AgentSession`；事件订阅后转成 SSE 广播。
 - 模型：`deepseek-v4-pro`（可在界面里切到 `deepseek-flash`）。
-- 工具：`read / write / edit / grep / find / ls`，**没有启用 bash**。
+- 工具：`read / write / edit / grep / find / ls`，加上自定义 `workbook_query / pdf_read / asr_read / westock_query / anysearch_search / web_fetch / create_tracking`；**没有启用 bash**。
 - 系统提示：Workbench 人设 + 工作空间约定 + 中文/简洁/Markdown（无表格）。
 
 ## API

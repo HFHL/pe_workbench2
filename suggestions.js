@@ -129,7 +129,7 @@
     for (const stateFile of all.filter(isState)) {
       const parsed = parseJsonPreview(stateFile);
       const folder = dir(stateFile.relPath);
-      const modelRel = parsed?.model?.files?.[0]?.absolute_path;
+      const modelRel = parsed?.model?.files?.[0]?.absolute_path || parsed?.subject?.model_file;
       const model = findByRel(modelRel);
       const siblings = all.filter(f => dir(f.relPath) === folder);
       const report = siblings.find(isReport) || null;
@@ -203,19 +203,26 @@
 
     switch (kind) {
       case 'analyze-model':
-        return `请解读估值模型 \`${model.relPath}\`，复现目标价和关键预测；把核心假设拆到公式和业务条件（如分地区增长、量价/产能、行情周期），做公式级敏感性，并结合行业、同行和截至今天的最新行情形成完整投资框架。报告写到 \`${targetFolder}/投资框架报告.md\`，先给结论，再给假设台账、敏感性、失效条件。`;
+        return `请解读估值模型 \`${model.relPath}\`，复现目标价和关键预测；把核心假设拆到公式和业务条件（如分地区增长、量价/产能、行情周期），做公式级敏感性，并结合行业、同行和截至今天的最新行情形成七节投资框架。同时把结论落成可跟踪的状态文件 \`${targetFolder}/analysis-state.json\`：观点 T1–Tn、假设 A、敏感性 S、失效条件 F 一一关联，每个观点至少一条可观测的失效条件。报告写到 \`${targetFolder}/投资框架报告.md\`，先给结论，再给观点台账、敏感性、失效条件与监控。`;
       case 'build-framework':
-        return `请读取 \`${stateFile.relPath}\` 中的假设、证据和缺口，基于它生成一份完整的投资框架报告，写到 \`${targetFolder}/投资框架报告.md\`。先给结论，再给驱动链、假设台账（公式与业务条件）、估值、公式级敏感性、情景一致性和失效条件。`;
+        return `请读取 \`${stateFile.relPath}\` 中的假设、观点、证据和缺口，沿用稳定 ID 生成七节投资框架报告，写到 \`${targetFolder}/投资框架报告.md\`。补齐每个观点的正反证据、替代解释和至少一条带阈值、来源、频率、触发动作的失效条件；同步更新 \`${targetFolder}/analysis-state.json\`，不要丢掉未受影响的判断。`;
       case 'update-framework':
         return market
-          ? `请用截至今天的最新财务、行情和同行数据复核 \`${reportPath}\`：先对比 \`${market.relPath}\` 的最新行情与原假设，检查原假设的公式和业务条件是否仍成立，重算受影响的敏感性，再只更新受影响的部分，并说明哪些结论变了、为什么。`
-          : `请用截至今天的最新财务、行情和同行数据复核 \`${reportPath}\`：对比原预测与假设，检查原假设的公式和业务条件是否仍成立，重算受影响的敏感性，更新受影响的部分，并说明哪些结论变了、为什么。`;
+          ? `请复核 \`${reportPath}\`：先读同目录的 \`analysis-state.json\`，对比 \`${market.relPath}\` 的最新行情与原假设，用截至今天的最新财务、行情和同行数据逐条核对失效条件（指标、阈值、来源、频率），只在证据支持时改变观点状态，只更新受影响的小节和状态文件；说明哪些观点维持、降级或失效，哪些失效条件被触发。`
+          : `请复核 \`${reportPath}\`：先读同目录的 \`analysis-state.json\`，用截至今天的最新财务、行情和同行数据逐条核对失效条件（指标、阈值、来源、频率），只在证据支持时改变观点状态，只更新受影响的小节和状态文件；说明哪些观点维持、降级或失效，哪些失效条件被触发。`;
       case 'track-assess':
-        return `请评估 \`${reportPath}\` 是否适合纳入定期跟踪：给出建议的运行频率、每次需要监控的指标、失效条件和风险。先不要修改文件。`;
+        return `请评估 \`${reportPath}\` 是否适合纳入定期跟踪：读同目录的 \`analysis-state.json\`，按失效条件的来源与频率给出建议运行频率、每轮要核对的指标、触发后的动作和缺数据项。先不要修改文件。`;
+      case 'backfill-state':
+        return `请加载 investment-framework Skill 的“补建状态”流程：读取 \`${reportPath}\`，只抽取报告里明确写过的观点、假设、敏感性、失效条件和证据，生成同目录的 \`analysis-state.json\`。保留报告的 ID 与结构，不重写结论；抽出来的证据标 kind=inference，stage=draft，并在 review.notes 写明“由报告回溯补建”。完成后告诉我需要人工核对哪些项。`;
       case 'check-tracking': {
         const tracking = trackingFor(report);
         const when = tracking?.nextRunLabel ? `下次运行 ${tracking.nextRunLabel}` : '查看最近一次跟踪结果';
         return `请读取 \`${reportPath}\` 最近一次跟踪记录和当前版本，用 3 句话告诉我：结论有没有变、关键变化是什么、是否需要调整。${when ? `（${when}）` : ''}`;
+      }
+      case 'setup-monitoring': {
+        const tracking = trackingFor(report);
+        const statePath = stateFile?.relPath || `${dir(reportPath)}/analysis-state.json`;
+        return `请加载 monitoring-setup Skill，读取 \`${statePath}\` 和 \`${reportPath}\`${tracking ? `（跟踪已建立：${tracking.scheduleLabel || '已启用'}）` : ''}。把报告第 6 节的失效条件整理成 MON 监测项：每项给出关联观点、指标、来源、频率、预警阈值、失效阈值、触发动作和默认自治级别；先做一次试取数，取不到的标 unknown。把方案和缺数据项列清楚让我确认，不要直接激活，也不要改模型。`;
       }
       case 'model-actuals':
         return `请检查 \`${model.relPath}\` 里哪些预测现在已经有确定的实际值可以替换，列出变更计划、影响链和需要人工确认的项。不要直接修改 xlsx，按工作台只读边界处理。`;
@@ -289,9 +296,16 @@
       }
       if (report) {
         addCandidate(list, group, 'update-framework', 'refresh', 'yellow', reportOlderThanMarket ? '用最新行情复核' : '复核投资框架', reportOlderThanMarket ? '行情已更新，检查原假设' : '对比新数据与原假设', 30 + (reportOlderThanMarket ? 14 : 0), lastTouched, pendingIds);
+        if (!stateFile) {
+          addCandidate(list, group, 'backfill-state', 'layers', 'blue', '补建分析状态', '让报告可被跟踪', 28, lastTouched, pendingIds);
+        }
         if (!tracking) {
           addCandidate(list, group, 'track-assess', 'clock', 'yellow', '评估是否跟踪', '给出频率与监控指标', 26, lastTouched, pendingIds);
         } else {
+          const monitorCount = Array.isArray(tracking.monitors) ? tracking.monitors.length : 0;
+          if (!monitorCount) {
+            addCandidate(list, group, 'setup-monitoring', 'search', 'blue', '配置监测项', '把失效条件变成自动监控', 34, lastTouched, pendingIds);
+          }
           addCandidate(list, group, 'check-tracking', 'history', 'green', '查看跟踪结论', '最近一次调整与版本', 24, lastTouched, pendingIds);
         }
         if (model) {

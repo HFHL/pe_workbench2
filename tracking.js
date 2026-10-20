@@ -108,6 +108,10 @@
       throw error;
     } finally {
       ui.loading = false;
+      if (ui.openId) {
+        const open = ui.trackings.find((item) => item.id === ui.openId);
+        if (open) renderDetail();
+      }
     }
   }
 
@@ -664,6 +668,7 @@
     detailOverlay.hidden = false;
     $('#trackDialog')?.focus();
     if (t.running) watchRun(id);
+    if (t.template === 'framework') void loadModelInfo(id);
   }
 
   function closeDetail(restoreFocus = true) {
@@ -700,18 +705,144 @@
           </div>
         </header>
         <div class="track-body">
+          ${notificationsHTML(t)}
+          ${t.template === 'framework' ? modelHTML(t) : ''}
+          ${monitorsHTML(t)}
           ${t.running ? runningHTML(t) : resultHTML(t, result)}
         </div>
         <footer class="track-foot">
           <div class="track-foot-left">
             <button class="btn" data-track-toggle>${t.enabled ? '暂停跟踪' : '启用跟踪'}</button>
             <button class="btn" data-track-schedule>调整时间</button>
+            ${(t.monitors || []).length ? `<button class="btn" data-track-check-monitors ${t.running ? 'disabled' : ''}>检查监测项</button>` : ''}
           </div>
           <div class="track-foot-right">
             <button class="btn primary" data-track-run ${t.running ? 'disabled' : ''}>${t.running ? '运行中…' : '立即运行'}</button>
           </div>
         </footer>
       </div>`;
+  }
+
+  const MONITOR_STATUS_LABEL = {
+    armed: '监控中',
+    warning: '接近阈值',
+    triggered: '已触发',
+    unknown: '缺数据',
+    retired: '已归档',
+  };
+
+  async function loadModelInfo(id) {
+    const t = getById(id);
+    if (!t) return;
+    if (t.modelInfo !== undefined) return;
+    try {
+      const info = await api(`/api/trackings/${id}/model`);
+      const current = getById(id);
+      if (!current) return;
+      current.modelInfo = info;
+      if (ui.openId === id) renderDetail();
+    } catch (error) {
+      const current = getById(id);
+      if (!current) return;
+      current.modelInfo = { error: error.message || '读取模型状态失败' };
+      if (ui.openId === id) renderDetail();
+    }
+  }
+
+  function modelHTML(t) {
+    const info = t.modelInfo;
+    if (!info) {
+      return `<section class="track-sec"><div class="track-sec-head"><h4>模型写回</h4><span>读取中…</span></div></section>`;
+    }
+    if (info.error) {
+      return `
+        <section class="track-sec">
+          <div class="track-sec-head"><h4>模型写回</h4><span>未准备</span></div>
+          <div class="monitor-empty-box"><p>${esc(info.error)}</p></div>
+        </section>`;
+    }
+    const model = info.model || {};
+    const bindings = Array.isArray(model.bindings) ? model.bindings : [];
+    const verified = bindings.filter(binding => binding.verified === true).length;
+    const outputs = Array.isArray(model.outputs) ? model.outputs : [];
+    const working = model.working_file || '';
+    return `
+      <section class="track-sec">
+        <div class="track-sec-head"><h4>模型写回</h4><span>${model.write_enabled === true ? '已启用' : '未启用'}</span></div>
+        <div class="model-box">
+          <div class="model-row"><span>工作模型</span><strong>${esc(working || '尚未准备')}</strong></div>
+          <div class="model-row"><span>单元格映射</span><strong>${verified} / ${bindings.length} 已确认</strong></div>
+          <div class="model-row"><span>校验输出</span><strong>${outputs.map(output => output.label || `${output.sheet}!${output.cell}`).join('、') || '—'}</strong></div>
+          ${model.last_applied ? `<div class="model-row"><span>最近写回</span><strong>${esc(String(model.last_applied.at || '').slice(0, 16))}</strong></div>` : ''}
+          <div class="monitor-actions">
+            ${working ? '' : `<button class="btn" data-track-prepare-model>准备工作模型</button>`}
+            <span class="model-hint">${model.write_enabled === true ? 'Agent 可在监测触发时改写工作模型并重算' : '需要确认绑定并启用写回后，Agent 才会改模型'}</span>
+          </div>
+        </div>
+      </section>`;
+  }
+
+  function notificationsHTML(t) {
+    const items = Array.isArray(t.notifications) ? t.notifications : [];
+    if (!items.length) return '';
+    const labels = { info: '提示', attention: '预警', action: '待处理' };
+    return `
+      <section class="track-sec">
+        <div class="track-sec-head"><h4>监测通知</h4><span>${items.filter(item => !item.readAt).length} 条未读 · 最近 ${items.length} 条</span></div>
+        <div class="notification-list">
+          ${items.map(item => `
+            <article class="notification-item ${item.readAt ? '' : 'is-unread'}">
+              <span class="notification-sev ${esc(item.severity || 'info')}">${esc(labels[item.severity] || item.severity || '')}</span>
+              <div class="notification-main">
+                <strong>${esc(item.title || '')}</strong>
+                ${item.body ? `<p>${esc(item.body).slice(0, 220)}</p>` : ''}
+              </div>
+              <span class="notification-time">${esc(timeAgo(item.createdAt))}</span>
+              ${item.runId ? `<button class="notify-undo" data-notify-undo="${esc(item.runId)}">撤销</button>` : ''}
+            </article>`).join('')}
+        </div>
+      </section>`;
+  }
+
+  function monitorsHTML(t) {
+    const items = Array.isArray(t.monitors) ? t.monitors : [];
+    if (!items.length) {
+      return `
+        <section class="track-sec monitor-empty">
+          <div class="track-sec-head"><h4>监测项</h4><span>尚未配置</span></div>
+          <div class="monitor-empty-box">
+            <p>把报告里的失效条件变成后台可执行的 MON 项，才能按时间和事件自动检查。可以先用对话里的“配置监测项”生成方案，再从这里同步。</p>
+            <button class="btn" data-track-sync-monitors>从分析状态同步监测项</button>
+          </div>
+        </section>`;
+    }
+    return `
+      <section class="track-sec">
+        <div class="track-sec-head"><h4>监测项</h4><span>${items.length} 项 · 契约 v${Number(t.contractVersion || 1)}</span></div>
+        <div class="monitor-list">
+          ${items.map(item => {
+            const next = item.nextCheckAt ? `下次 ${esc(item.nextCheckAt)}` : '事件驱动';
+            return `
+              <article class="monitor-item">
+                <div class="monitor-top">
+                  <span class="thesis-id">${esc(item.id || '')}</span>
+                  <span class="monitor-thesis">→ ${esc(item.thesisId || '—')}</span>
+                  <strong>${esc(item.metric || item.threshold || '')}</strong>
+                  <span class="thesis-pill ${esc(item.status || 'armed')}">${esc(MONITOR_STATUS_LABEL[item.status] || item.status || '')}</span>
+                </div>
+                <div class="monitor-foot">
+                  <span>${esc(item.frequency || '')} · ${next}</span>
+                  ${item.lastObserved ? `<span>观察 ${esc(item.lastObserved)}</span>` : ''}
+                  <span>${esc(item.autonomy || '')}</span>
+                </div>
+              </article>`;
+          }).join('')}
+        </div>
+        <div class="monitor-actions">
+          <button class="btn" data-track-refresh-events>刷新来源</button>
+          <button class="btn" data-track-sync-monitors>重新同步</button>
+        </div>
+      </section>`;
   }
 
   function resultHTML(t, result) {
@@ -754,6 +885,64 @@
           <span class="judgment-label">${ic('info', 13)}判断变化</span>
           <strong>${esc(result.judgment.title)}</strong>
           <p>${esc(result.judgment.text)}</p>
+        </section>`
+      : '';
+    const thesisStatusLabel = { active: '成立中', weakened: '减弱', invalidated: '已失效', confirmed: '已确认', retired: '已归档' };
+    const theses = result.theses && result.theses.length
+      ? `<section class="track-sec">
+          <div class="track-sec-head"><h4>观点状态</h4><span>${result.theses.length} 条观点 · 与状态文件对应</span></div>
+          <div class="thesis-list">
+            ${result.theses.map(t => `
+              <article class="thesis-item">
+                <div class="thesis-top">
+                  <span class="thesis-id">${esc(t.id)}</span>
+                  <strong>${esc(t.statement || t.id)}</strong>
+                  <span class="thesis-pill ${esc(t.status)}">${esc(thesisStatusLabel[t.status] || t.status)}</span>
+                </div>
+                <div class="thesis-foot">
+                  ${t.change ? `<span class="thesis-change">${esc(t.change)}</span>` : ''}
+                  ${t.note ? `<p>${esc(t.note)}</p>` : ''}
+                </div>
+              </article>`).join('')}
+          </div>
+        </section>`
+      : '';
+    const triggeredInvalidations = (result.invalidations || []).filter(item => item.triggered);
+    const invalidations = result.invalidations && result.invalidations.length
+      ? `<section class="track-sec">
+          <div class="track-sec-head"><h4>失效条件核对</h4><span>${triggeredInvalidations.length} 条触发 · 共 ${result.invalidations.length} 条</span></div>
+          <div class="inval-list">
+            ${result.invalidations.map(item => `
+              <article class="inval-item${item.triggered ? ' is-triggered' : ''}">
+                <div class="inval-top">
+                  <span class="thesis-id">${esc(item.id)}</span>
+                  ${item.thesis_id ? `<span class="inval-link">→ ${esc(item.thesis_id)}</span>` : ''}
+                  <strong>${esc(item.condition || '')}</strong>
+                  <span class="inval-pill ${item.triggered ? 'on' : 'off'}">${item.triggered ? '已触发' : '未触发'}</span>
+                </div>
+                <div class="inval-foot">
+                  ${item.observed ? `<span class="inval-observed">观察值 ${esc(item.observed)}</span>` : ''}
+                  ${item.action ? `<span class="inval-action">动作：${esc(item.action)}</span>` : ''}
+                </div>
+              </article>`).join('')}
+          </div>
+        </section>`
+      : '';
+    const monitorChecks = result.monitorChecks && result.monitorChecks.length
+      ? `<section class="track-sec">
+          <div class="track-sec-head"><h4>本次监测</h4><span>${result.monitorChecks.filter(item => item.status === 'triggered').length} 项触发 · 共 ${result.monitorChecks.length} 项</span></div>
+          <div class="monitor-list">
+            ${result.monitorChecks.map(item => `
+              <article class="monitor-item">
+                <div class="monitor-top">
+                  <span class="thesis-id">${esc(item.id)}</span>
+                  ${item.falsifier_id ? `<span class="monitor-thesis">→ ${esc(item.falsifier_id)}</span>` : ''}
+                  <strong>${esc(item.observed || '—')}</strong>
+                  <span class="thesis-pill ${esc(item.status || 'unknown')}">${esc(MONITOR_STATUS_LABEL[item.status] || item.status || '')}</span>
+                </div>
+                ${item.note ? `<div class="monitor-foot"><span>${esc(item.note)}</span></div>` : ''}
+              </article>`).join('')}
+          </div>
         </section>`
       : '';
     const wb = result.writeback;
@@ -810,6 +999,9 @@
         <p class="rh-summary">${esc(result.summary)}</p>
         ${deltas}
       </section>
+      ${theses}
+      ${invalidations}
+      ${monitorChecks}
       ${judgment}
       ${reasons}
       ${writeback}
@@ -870,6 +1062,108 @@
     });
     const label = $('#runStepText');
     if (label) label.textContent = `${RUN_STEPS[step]}…`;
+  }
+
+  async function syncMonitors() {
+    const t = getById(ui.openId);
+    if (!t) return;
+    const button = $('[data-track-sync-monitors]', detailOverlay);
+    if (button) {
+      button.disabled = true;
+      button.textContent = '同步中…';
+    }
+    try {
+      const result = await api(`/api/trackings/${t.id}/monitors/activate`, {
+        method: 'POST',
+        body: {},
+      });
+      const fresh = await api(`/api/trackings/${t.id}`);
+      upsertTracking(fresh);
+      if (ui.openId === t.id) renderDetail();
+      toast(result.items?.length ? `已同步 ${result.items.length} 个监测项` : '状态文件里还没有可同步的失效条件');
+    } catch (error) {
+      toast(error.message || '同步监测项失败');
+      if (button) {
+        button.disabled = false;
+        button.textContent = '从分析状态同步监测项';
+      }
+    }
+  }
+
+  async function prepareModel() {
+    const t = getById(ui.openId);
+    if (!t) return;
+    const button = $('[data-track-prepare-model]', detailOverlay);
+    if (button) {
+      button.disabled = true;
+      button.textContent = '准备中…';
+    }
+    try {
+      await api(`/api/trackings/${t.id}/model/prepare`, { method: 'POST', body: {} });
+      const current = getById(t.id);
+      if (current) delete current.modelInfo;
+      if (ui.openId === t.id) {
+        await loadModelInfo(t.id);
+        renderDetail();
+      }
+      toast('工作模型已准备');
+    } catch (error) {
+      toast(error.message || '准备工作模型失败');
+      if (button) {
+        button.disabled = false;
+        button.textContent = '准备工作模型';
+      }
+    }
+  }
+
+  async function refreshEvents() {
+    const t = getById(ui.openId);
+    if (!t) return;
+    try {
+      const result = await api(`/api/trackings/${t.id}/events/refresh`, { method: 'POST', body: {} });
+      const created = (result.results || []).reduce((sum, item) => sum + (Number(item.events) || 0), 0);
+      toast(created ? `新增 ${created} 条来源事件` : '没有新的来源事件');
+      await loadTrackings();
+      if (ui.openId === t.id) renderDetail();
+    } catch (error) {
+      toast(error.message || '刷新来源失败');
+    }
+  }
+
+  async function undoRun(runId) {
+    if (!runId) return;
+    try {
+      await api(`/api/runs/${encodeURIComponent(runId)}/undo`, { method: 'POST' });
+      await loadTrackings();
+      if (ui.openId) renderDetail();
+      toast('已撤销这次更新');
+    } catch (error) {
+      toast(error.message || '撤销失败');
+    }
+  }
+
+  async function checkMonitors() {
+    const t = getById(ui.openId);
+    if (!t || t.running) return;
+    t.running = true;
+    t.runStep = 0;
+    t.runStartedAt = Date.now();
+    renderDetail();
+    renderPanel();
+    try {
+      const result = await api(`/api/trackings/${t.id}/monitors/check`, {
+        method: 'POST',
+        body: {},
+      });
+      if (result.tracking) upsertTracking(result.tracking);
+      watchRun(t.id);
+    } catch (error) {
+      const current = getById(t.id);
+      if (current) current.running = false;
+      if (ui.openId === t.id) renderDetail();
+      renderPanel();
+      toast(error.message || '启动监测检查失败');
+    }
   }
 
   async function startRun(id) {
@@ -1129,6 +1423,12 @@
       if (e.target.closest('[data-track-open-file]')) { openTargetFile(); return; }
       if (e.target.closest('[data-track-toggle]')) { toggleTracking(); return; }
       if (e.target.closest('[data-track-schedule]')) { openSchedule(); return; }
+      if (e.target.closest('[data-track-sync-monitors]')) { syncMonitors(); return; }
+      if (e.target.closest('[data-track-prepare-model]')) { prepareModel(); return; }
+      const undo = e.target.closest('[data-notify-undo]');
+      if (undo) { e.stopPropagation(); undoRun(undo.dataset.notifyUndo); return; }
+      if (e.target.closest('[data-track-check-monitors]')) { checkMonitors(); return; }
+      if (e.target.closest('[data-track-refresh-events]')) { refreshEvents(); return; }
       if (e.target.closest('[data-track-run]')) { startRun(ui.openId); return; }
     });
 

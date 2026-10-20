@@ -58,6 +58,16 @@
           <h1 class="chat-title" id="chatTitle">定价页重构</h1>
           <div class="ch-actions">
             <div class="pop-wrap">
+              <button class="icon-btn notify-btn" id="notifyBtn" aria-haspopup="true" aria-expanded="false" aria-label="监测通知" title="监测通知">
+                <svg class="i" width="16" height="16"><use href="#i-info"/></svg>
+                <span class="notify-badge" id="notifyBadge" hidden>0</span>
+              </button>
+              <div class="menu notify-menu" id="notifyMenu" hidden>
+                <div class="notify-menu-head">监测通知</div>
+                <div class="notify-menu-list" id="notifyList"><p class="notify-empty">暂无通知</p></div>
+              </div>
+            </div>
+            <div class="pop-wrap">
               <button class="model-chip" id="modelBtn" aria-haspopup="menu" aria-expanded="false">
                 <span class="dot" aria-hidden="true"></span>
                 <span id="modelName">deepseek-v4-pro</span>
@@ -80,7 +90,7 @@
           <div class="next-actions" id="nextActions" hidden></div>
           <form class="composer" id="composer">
             <div class="attachments" id="attachments"></div>
-            <textarea id="input" rows="1" placeholder="输入消息，或拖入文件（发送时上传）" aria-label="消息内容"></textarea>
+            <textarea id="input" rows="1" placeholder="输入消息、粘贴网页链接，或拖入文件（发送时上传）" aria-label="消息内容"></textarea>
             <div class="composer-bar">
               <div class="composer-left">
                 <button type="button" class="attach" id="attachBtn"><svg class="i" width="15" height="15"><use href="#i-paperclip"/></svg>添加附件</button>

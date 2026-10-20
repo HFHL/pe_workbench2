@@ -1,0 +1,59 @@
+{
+  "schema_version": "2.0",
+  "framework_id": "IF-<slug>",
+  "revision": 1,
+  "stage": "draft",
+  "subject": {
+    "company": "",
+    "security": "",
+    "currency": "CNY",
+    "units": "百万元",
+    "model_as_of": null,
+    "model_file": "",
+    "model_fingerprint": "",
+    "valuation_date": null,
+    "market_price_date": null,
+    "actuals_through": null,
+    "forecast_start": null,
+    "data_cutoff": null,
+    "horizon": ""
+  },
+  "model": {
+    "understanding": {
+      "revenue": "",
+      "costs_profit": "",
+      "cash_flow": "",
+      "valuation": ""
+    },
+    "checks": []
+  },
+  "sources": [],
+  "evidence": [],
+  "assumptions": [],
+  "theses": [],
+  "sensitivities": [],
+  "valuations": [],
+  "market": {
+    "price": null,
+    "price_date": null,
+    "consensus": null,
+    "consensus_source_ids": [],
+    "implied": "",
+    "limitations": ""
+  },
+  "falsifiers": [],
+  "gaps": [],
+  "changes": [],
+  "tracking": {
+    "last_run_id": null,
+    "last_run_at": null,
+    "data_cutoff": null,
+    "thesis_status": {},
+    "triggered_falsifier_ids": []
+  },
+  "review": {
+    "status": "draft",
+    "mode": "self",
+    "notes": []
+  }
+}

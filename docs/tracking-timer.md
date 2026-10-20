@@ -3,8 +3,9 @@
 > 状态：**P0 初版已接入真实后端**。SQLite `trackings / tracking_runs`、30s 调度器、真实 Pi `AgentSession`、结果契约、同文件版本提交、自动备份、SSE 更新都已跑通。
 > 已真实验证：`同行行情.md` 通过跟踪运行生成 v1 → v2 → v3 → v4（每次都有备份与结果 JSON）；估值模型运行返回 `needs_review`，只生成变更计划，不写回 xlsx。
 > 相关实现：`tracking.js`、`tracking.css`、`index.html`、`app.js`、`server.mjs`、`store.mjs`、`lib/tracking.mjs`。
-> 相关 Skill：`agent-workspace/.agents/skills/file-tracking/SKILL.md`、`investment-model-updater` 的“跟踪运行模式”。
+> 相关 Skill：`skills/investment-framework/SKILL.md`（形成框架与状态）、`skills/framework-update/SKILL.md`（跟踪运行）。设计说明见 [investment-framework-skill.md](investment-framework-skill.md)。
 > 相关基底：[foundation.md](foundation.md)、[pi-harness-integration.md](pi-harness-integration.md)。
+> 自动监测（MON / 事件 / 通知 / 静默修订）的后续设计见 [auto-update.md](auto-update.md)。
 
 ---
 
@@ -16,7 +17,7 @@ UI「立即运行」
   → store.startTrackingRun(base_version)
   → 备份目标文件到 backups/<timestamp>-<runId>/
   → 创建内部 Pi AgentSession（[跟踪] 前缀，不出现在左栏）
-  → prompt + file-tracking Skill + 领域 Skill
+  → prompt + framework-update Skill（框架模板）
   → Agent 读取目标 / 拉数据 / 原位写回同一路径 / 追加「## 跟踪记录」
   → Agent 写 .tracking/<tracking_id>/<run_id>.json
   → agent_settled
@@ -507,17 +508,18 @@ exports/investment-model/长鑫存储高盛模型/
 
 ## 6. Skill / 模板怎么配合
 
-跟踪运行使用三个 Skill：
+投资框架使用两个仓库级 Skill（位于 `skills/`，随产品分发；项目也可在 `.agents/skills/` 放自定义 Skill）：
 
-- `file-tracking`（新增）：宿主级文件身份、原位写回、`## 跟踪记录`、`tracking-result.json` 契约；
-- `investment-model-analyzer`：只读还原模型、建立投资框架、记录缺口；
-- `investment-model-updater`：滚动更新，先固定基线，再分析差异，生成变更计划，按格式写回，最后验证；已加入“跟踪运行模式”。
+- `investment-framework`：形成七节报告，并落盘 `analysis-state.json`——观点 T、假设 A、敏感性 S、失效条件 F 一一关联；
+- `framework-update`：跟踪运行专用，逐条核对失效条件，只改受影响部分，回写状态与报告，输出含 `theses` / `invalidations` 的结果 JSON。
+
+`model` / `generic` 模板没有专用 Skill，依靠 `lib/tracking.mjs` 里的领域规则和结果契约。
 
 跟踪模板不复制这些 Skill 的全部内容，而是做三件事：
 
-1. **选择 Skill**：`valuation-model` → updater + file-tracking；`investment-framework` → updater 的框架分支 + file-tracking；`generic` → file-tracking。
-2. **注入上下文**：目标文件、基线版本、上次 `tracking-result.json`、备份路径、允许的数据源、写回策略。
-3. **约束输出**：必须写 `tracking-result.json`；聊天里只给结论摘要；报告放 `exports/`。
+1. **选择 Skill**：`investment-framework` → framework-update；`valuation-model` / `generic` → 按模板领域规则执行。
+2. **注入上下文**：目标文件、基线版本、同目录 `analysis-state.json`、备份路径、允许的数据源、写回策略。
+3. **约束输出**：必须写 `.tracking/<id>/<run_id>.json`；聊天里只给结论摘要；报告放 `exports/`。
 
 模板本身应该版本化（`template_version`），否则无法解释“为什么上周和这周的判断不同”。模板变更也要能在运行记录里看到。
 
@@ -599,10 +601,10 @@ exports/investment-model/长鑫存储高盛模型/
 - SQLite `trackings / tracking_runs` 持久化；一个目标文件只允许一个跟踪；
 - 30s 调度器 + `lease_until` 防并发；服务重启时把中断的 running 标失败并释放租约；
 - 真实 Pi `AgentSession`：内部会话标题 `[跟踪]`，不出现在左栏；
-- 三个内置模板 + 自动匹配；`file-tracking` Skill 约束文件身份与结果契约；
+- 三个内置模板 + 自动匹配；`framework-update` Skill 约束状态与结果契约；
 - Markdown 原位更新：同一路径产生 v1 → v2 → v3；服务端自动备份到 `backups/<timestamp>-<runId>/`；
 - Excel 只读：生成 `update-plan.json` / `change-log.md`，状态 `needs_review`，原 xlsx 不产生新版本；
-- `tracking-result.json` 规范化：结论、数字、判断变化、原因、来源、写回、未使用项；
+- `tracking-result.json` 规范化：结论、数字、判断变化、原因、来源、写回、未使用项；框架模板额外包含观点状态（`theses`）与失效条件核对（`invalidations`）；
 - UI：结论优先、版本切换、暂停/恢复、改时间、运行记录、SSE 实时更新；
 - 真实验证：`同行行情.md` 连续生成 v2/v3/v4；`高盛-长鑫-Model` 返回 needs_review。
 

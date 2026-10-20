@@ -135,6 +135,7 @@ const state = {
   files: [],
   tasks: [],
   sessions: [],
+  notifications: [],
 
 };
 
@@ -281,6 +282,8 @@ const TOOL_LABELS = {
   ls: '查看目录',
   workbook_query: '查询模型',
   westock_query: '查询行情',
+  anysearch_search: '搜索网络',
+  web_fetch: '读取网页',
   bash: '执行命令',
 };
 
@@ -293,6 +296,8 @@ const RUNNING_LABELS = {
   ls: '正在查看目录',
   workbook_query: '正在读取模型',
   westock_query: '正在查询行情',
+  anysearch_search: '正在搜索网络',
+  web_fetch: '正在读取网页',
   bash: '正在执行命令',
 };
 
@@ -429,6 +434,7 @@ async function hydrateReports(root = threadEl) {
       let text = reportCache.get(key);
       if (text == null) {
         const res = await fetch(withProject(`/api/file?path=${encodeURIComponent(path)}`));
+        if (res.status === 404) throw new Error("报告文件已不存在（可能来自已清理的测试会话）");
         if (!res.ok) throw new Error(`读取失败（${res.status}）`);
         text = await res.text();
         reportCache.set(key, text);
@@ -2731,15 +2737,23 @@ function renderFileDialog() {
   }
 
   $('#dVerTitle').textContent = f.kind === 'input' ? '同步记录' : '版本历史';
-  $('#dVerCount').textContent = latest(f).v === f.versions.length ? `共 ${f.versions.length}` : `保留 ${f.versions.length} 条`;
-  $('#dVersions').innerHTML = f.versions.map(x => `
+  const latestVersion = latest(f);
+  const checkpoints = f.versions.filter(x => x.visibility !== 'internal');
+  const visibleVersions = latestVersion.visibility === 'internal'
+    ? [latestVersion, ...checkpoints]
+    : checkpoints;
+  const internalCount = f.versions.length - checkpoints.length;
+  $('#dVerCount').textContent = internalCount
+    ? `${checkpoints.length} 个检查点 · ${internalCount} 次自动修订`
+    : `共 ${f.versions.length}`;
+  $('#dVersions').innerHTML = visibleVersions.map(x => `
     <button class="v-row${x.v === v.v ? ' is-active' : ''}" data-ver="${x.v}">
       <span class="ver">v${x.v}</span>
       <span class="v-main">
-        <span class="v-note">${esc(x.note)}</span>
+        <span class="v-note">${esc(x.note)}${x.visibility === 'internal' ? ' · 自动修订' : ''}</span>
         <span class="v-meta">${esc(x.at)} · ${esc(x.by)} · ${formatSize(x.size)}</span>
       </span>
-      ${x.v === latest(f).v ? '<span class="v-tag">当前</span>' : ''}
+      ${x.v === latestVersion.v ? '<span class="v-tag">当前</span>' : ''}
     </button>`).join('');
 
   const rich = RICH_PREVIEW.has(extOf(f.name));
@@ -3212,6 +3226,68 @@ function closeDrawers() {
   $('#filesToggle').setAttribute('aria-expanded', 'false');
 }
 
+function notificationTime(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return '';
+  const now = new Date();
+  const hm = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  if (date.toDateString() === now.toDateString()) return hm;
+  return `${date.getMonth() + 1}/${date.getDate()} ${hm}`;
+}
+
+function renderNotifications() {
+  const items = Array.isArray(state.notifications) ? state.notifications : [];
+  const unread = items.filter(item => !item.readAt).length;
+  const badge = $('#notifyBadge');
+  if (badge) {
+    badge.hidden = unread === 0;
+    badge.textContent = String(Math.min(99, unread));
+  }
+  const list = $('#notifyList');
+  if (!list) return;
+  if (!items.length) {
+    list.innerHTML = '<p class="notify-empty">暂无通知</p>';
+    return;
+  }
+  list.innerHTML = items.slice(0, 12).map(item => `
+    <button class="notify-entry${item.readAt ? '' : ' is-unread'}" data-notification="${esc(item.id)}" data-tracking="${esc(item.trackingId || '')}">
+      <span class="notify-dot" style="${item.readAt ? 'visibility:hidden' : ''}"></span>
+      <span class="notify-entry-main">
+        <span class="notify-entry-title">${esc(item.title || '')}</span>
+        <span class="notify-entry-body">${esc(item.body || '').slice(0, 140)}</span>
+      </span>
+      <span class="notify-entry-time">${esc(notificationTime(item.createdAt))}</span>
+    </button>`).join('');
+}
+
+async function loadNotifications() {
+  try {
+    const items = await api('/api/notifications?limit=20');
+    state.notifications = Array.isArray(items) ? items : [];
+    renderNotifications();
+  } catch {
+    /* notifications are best-effort; the rest of the app keeps working */
+  }
+}
+
+async function openNotification(id) {
+  const item = (state.notifications || []).find(entry => entry.id === id);
+  if (!item) return;
+  if (!item.readAt) {
+    try {
+      await api(`/api/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' });
+      item.readAt = new Date().toISOString();
+      renderNotifications();
+    } catch {
+      /* ignore */
+    }
+  }
+  toggleMenu($('#notifyMenu'), $('#notifyBtn'), false);
+  if (item.trackingId && window.Tracking?.openDetail) {
+    window.Tracking.openDetail(item.trackingId);
+  }
+}
+
 function toggleMenu(menu, btn, force) {
   const open = force !== undefined ? force : menu.hidden;
   menu.hidden = !open;
@@ -3420,6 +3496,8 @@ async function switchProject(id) {
   state.picked = new Set();
   state.streaming = false;
   state.live = { text: '', tools: [], startedAt: 0 };
+  state.notifications = [];
+  renderNotifications();
   state.filter = 'all';
   state.openFileId = null;
   state.selectedVersion = null;
@@ -3439,6 +3517,7 @@ async function switchProject(id) {
   syncComposer();
   syncStop();
   connectGlobalEvents();
+  void loadNotifications();
 
   try {
     await loadSessions();
@@ -3499,6 +3578,13 @@ function connectGlobalEvents() {
     if (payload.type === 'plan.updated') upsertPlan(payload.plan);
     if (payload.type === 'tracking.updated') window.Tracking?.upsert?.(payload.tracking);
     if (payload.type === 'tracking.deleted') window.Tracking?.remove?.(payload.id);
+    if (payload.type === 'notification.created') {
+      void loadNotifications();
+      Promise.resolve(window.Tracking?.reload?.()).catch(() => {});
+    }
+    if (payload.type === 'monitor.updated') {
+      Promise.resolve(window.Tracking?.reload?.()).catch(() => {});
+    }
   };
 }
 
@@ -3519,6 +3605,7 @@ async function boot() {
     toast(error.message || '加载项目失败');
   }
   connectGlobalEvents();
+  void loadNotifications();
   try {
     await loadSessions();
   } catch (error) {
@@ -3866,6 +3953,15 @@ async function init() {
   $('#projectCancel').addEventListener('click', () => closeProjectDialog());
   projectOverlay.addEventListener('click', e => { if (e.target === projectOverlay) closeProjectDialog(); });
   $('#projectDialog').addEventListener('submit', submitProjectDialog);
+  $('#notifyBtn').addEventListener('click', e => {
+    e.stopPropagation();
+    toggleMenu($('#notifyMenu'), $('#notifyBtn'));
+    if (!$('#notifyMenu').hidden) void loadNotifications();
+  });
+  $('#notifyList').addEventListener('click', e => {
+    const item = e.target.closest('[data-notification]');
+    if (item) void openNotification(item.dataset.notification);
+  });
   $('#modelBtn').addEventListener('click', e => {
     e.stopPropagation();
     toggleMenu($('#modelMenu'), $('#modelBtn'));
@@ -3890,13 +3986,17 @@ async function init() {
 
   document.addEventListener('click', e => {
     if (!e.target.closest('.ws-wrap')) toggleMenu($('#wsMenu'), $('#workspaceBtn'), false);
-    if (!e.target.closest('.pop-wrap')) toggleMenu($('#modelMenu'), $('#modelBtn'), false);
+    if (!e.target.closest('.pop-wrap')) {
+      toggleMenu($('#modelMenu'), $('#modelBtn'), false);
+      toggleMenu($('#notifyMenu'), $('#notifyBtn'), false);
+    }
   });
   document.addEventListener('keydown', e => {
     if (!projectOverlay.hidden || !taskOverlay.hidden || !overlay.hidden) { trapFocus(e); return; }
     if (e.key === 'Escape') {
       toggleMenu($('#wsMenu'), $('#workspaceBtn'), false);
       toggleMenu($('#modelMenu'), $('#modelBtn'), false);
+      toggleMenu($('#notifyMenu'), $('#notifyBtn'), false);
       closeDrawers();
     }
   });

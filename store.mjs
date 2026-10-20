@@ -87,6 +87,69 @@ export class Store {
     this.db.exec(`alter table ${table} add column ${column} ${definition}`);
   }
 
+  /**
+   * Early P0 builds gave monitor_items a global primary key on `id`, which
+   * collides when two frameworks both use MON1. Monitor IDs are only unique
+   * inside a tracking, so rebuild the table with (tracking_id, id).
+   */
+  migrateMonitorItemsKey() {
+    const row = this.db.prepare(
+      `select sql from sqlite_master where type = 'table' and name = 'monitor_items'`,
+    ).get();
+    if (!row?.sql || !/id\s+text\s+primary\s+key/i.test(row.sql)) return;
+    try {
+      this.db.exec(`
+      begin;
+      drop table if exists monitor_items_v2;
+      create table monitor_items_v2 (
+        id text not null,
+        workspace_id text not null,
+        tracking_id text not null references trackings(id) on delete cascade,
+        falsifier_id text not null default '',
+        thesis_id text not null default '',
+        metric text not null default '',
+        operator text not null default '',
+        warning text not null default '',
+        threshold text not null default '',
+        unit text not null default '',
+        frequency text not null default 'monthly',
+        source_json text not null default '{}',
+        action text not null default '',
+        rationale text not null default '',
+        status text not null default 'armed',
+        last_observed text not null default '',
+        last_checked_at text,
+        next_check_at text,
+        autonomy text not null default 'auto_notify',
+        created_at text not null,
+        updated_at text not null,
+        primary key (tracking_id, id)
+      );
+      insert or replace into monitor_items_v2 (
+        id, workspace_id, tracking_id, falsifier_id, thesis_id, metric, operator,
+        warning, threshold, unit, frequency, source_json, action, rationale, status,
+        last_observed, last_checked_at, next_check_at, autonomy, created_at, updated_at
+      ) select
+        id, workspace_id, tracking_id, falsifier_id, thesis_id, metric, operator,
+        warning, threshold, unit, frequency, source_json, action, rationale, status,
+        last_observed, last_checked_at, next_check_at, autonomy, created_at, updated_at
+      from monitor_items;
+      drop table monitor_items;
+      alter table monitor_items_v2 rename to monitor_items;
+      create index if not exists idx_monitor_items_tracking on monitor_items(tracking_id);
+      create index if not exists idx_monitor_items_due on monitor_items(status, next_check_at);
+      commit;
+    `);
+    } catch (error) {
+      try {
+        this.db.exec("rollback");
+      } catch {
+        /* ignore */
+      }
+      throw error;
+    }
+  }
+
   migrate() {
     this.db.exec(`
       PRAGMA journal_mode = WAL;
@@ -212,6 +275,94 @@ export class Store {
         scheduled_for text
       );
 
+      create table if not exists monitor_items (
+        id text not null,
+        workspace_id text not null,
+        tracking_id text not null references trackings(id) on delete cascade,
+        falsifier_id text not null default '',
+        thesis_id text not null default '',
+        metric text not null default '',
+        operator text not null default '',
+        warning text not null default '',
+        threshold text not null default '',
+        unit text not null default '',
+        frequency text not null default 'monthly',
+        source_json text not null default '{}',
+        action text not null default '',
+        rationale text not null default '',
+        status text not null default 'armed',
+        last_observed text not null default '',
+        last_checked_at text,
+        next_check_at text,
+        autonomy text not null default 'auto_notify',
+        created_at text not null,
+        updated_at text not null,
+        primary key (tracking_id, id)
+      );
+
+      create table if not exists source_bindings (
+        id text primary key,
+        workspace_id text not null,
+        tracking_id text not null references trackings(id) on delete cascade,
+        monitor_item_id text,
+        adapter text not null,
+        query text not null default '',
+        source_tier integer not null default 3,
+        interval_minutes integer not null default 360,
+        next_poll_at text,
+        last_polled_at text,
+        enabled integer not null default 1,
+        created_at text not null,
+        updated_at text not null
+      );
+
+      create table if not exists source_events (
+        id text primary key,
+        workspace_id text not null,
+        tracking_id text,
+        monitor_item_id text,
+        adapter text not null,
+        source_tier integer not null default 2,
+        domain text not null default '',
+        url text not null default '',
+        title text not null default '',
+        published_at text,
+        fetched_at text not null,
+        content_hash text not null default '',
+        payload_json text,
+        triage_status text not null default 'new',
+        relevance text not null default '',
+        used_in_run_id text,
+        created_at text not null
+      );
+
+      create table if not exists notifications (
+        id text primary key,
+        workspace_id text not null,
+        tracking_id text,
+        run_id text,
+        severity text not null default 'info',
+        title text not null,
+        body text not null default '',
+        changes_json text,
+        actions_json text,
+        read_at text,
+        created_at text not null
+      );
+
+      create table if not exists run_changes (
+        id text primary key,
+        workspace_id text not null,
+        run_id text not null,
+        object_type text not null,
+        object_id text not null default '',
+        before_json text,
+        after_json text,
+        evidence_ids text,
+        applied integer not null default 0,
+        created_at text not null
+      );
+
       create table if not exists document_parses (
         blob_sha256 text primary key,
         file_name text not null,
@@ -229,6 +380,12 @@ export class Store {
       create index if not exists idx_runs_plan on plan_runs(plan_id, started_at desc);
       create index if not exists idx_trackings_next on trackings(enabled, next_run_at);
       create index if not exists idx_tracking_runs on tracking_runs(tracking_id, started_at desc);
+      create index if not exists idx_monitor_items_tracking on monitor_items(tracking_id);
+      create index if not exists idx_monitor_items_due on monitor_items(status, next_check_at);
+      create index if not exists idx_source_events_tracking on source_events(tracking_id, created_at desc);
+      create index if not exists idx_source_bindings_due on source_bindings(enabled, next_poll_at);
+      create index if not exists idx_source_bindings_tracking on source_bindings(tracking_id);
+      create index if not exists idx_notifications_created on notifications(workspace_id, created_at desc);
     `);
 
     // Older databases predate the project metadata columns.
@@ -236,6 +393,22 @@ export class Store {
     this.ensureColumn("workspaces", "accent", "text not null default 'slate'");
     this.ensureColumn("workspaces", "updated_at", "text");
     this.ensureColumn("workspaces", "last_opened_at", "text");
+
+    // Monitoring / quiet revisions are additive migrations so existing
+    // databases keep working without a manual reset.
+    this.ensureColumn("trackings", "mode", "text not null default 'monitor'");
+    this.ensureColumn("trackings", "autonomy_default", "text not null default 'auto_notify'");
+    this.ensureColumn("trackings", "notification_policy", "text not null default 'in_app'");
+    this.ensureColumn("trackings", "contract_version", "integer not null default 0");
+    this.ensureColumn("material_versions", "visibility", "text not null default 'checkpoint'");
+    this.ensureColumn("material_versions", "run_id", "text");
+    this.ensureColumn("material_versions", "reason", "text");
+    this.ensureColumn("tracking_runs", "decision_class", "text");
+    this.ensureColumn("tracking_runs", "confidence", "text");
+    this.ensureColumn("tracking_runs", "checkpoint_id", "text");
+    this.ensureColumn("tracking_runs", "notification_id", "text");
+    this.ensureColumn("tracking_runs", "verification_json", "text");
+    this.migrateMonitorItemsKey();
 
     const now = nowIso();
     this.db.prepare(
@@ -400,14 +573,19 @@ export class Store {
     if (changed) {
       const v = (latest?.v || 0) + 1;
       this.db.prepare(
-        `insert into material_versions (material_id, v, blob_sha256, size, note, author, created_at, preview_json)
-         values (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `insert into material_versions (
+          material_id, v, blob_sha256, size, note, author, created_at, preview_json,
+          visibility, run_id, reason
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         row.id, v, sha, stat.size,
         options.note || (v === 1 ? "项目文件" : "更新"),
         options.author || "Workbench",
         options.at || now,
         JSON.stringify(this.previewFor(normalized, content)),
+        options.visibility === "internal" ? "internal" : "checkpoint",
+        options.runId || null,
+        options.reason || null,
       );
     }
 
@@ -441,6 +619,9 @@ export class Store {
         by: version.author,
         note: version.note,
         size: version.size,
+        visibility: version.visibility || "checkpoint",
+        runId: version.run_id || null,
+        reason: version.reason || null,
         preview,
       };
     });
@@ -653,6 +834,14 @@ export class Store {
 
   /* ---------- trackings ---------- */
 
+  getTrackingRun(id) {
+    return this.db.prepare(
+      `select tr.* from tracking_runs tr
+       join trackings t on t.id = tr.tracking_id
+       where tr.id = ? and t.workspace_id = ?`,
+    ).get(id, this.projectId) || null;
+  }
+
   getTrackingRow(id) {
     return this.db.prepare(`select * from trackings where id = ? and workspace_id = ?`).get(id, this.projectId);
   }
@@ -740,6 +929,12 @@ export class Store {
       lastRun: lastRun ? runDto(lastRun) : null,
       runs: runs.map(runDto),
       result,
+      mode: row.mode || "monitor",
+      autonomyDefault: row.autonomy_default || "auto_notify",
+      notificationPolicy: row.notification_policy || "in_app",
+      contractVersion: row.contract_version ?? 0,
+      monitors: this.listMonitorItems(row.id),
+      notifications: this.listNotifications({ trackingId: row.id, limit: 5 }),
     };
   }
 
@@ -806,6 +1001,12 @@ export class Store {
   }
 
   deleteTracking(id) {
+    this.db.prepare(`delete from source_events where tracking_id = ? and workspace_id = ?`).run(id, this.projectId);
+    this.db.prepare(`delete from notifications where tracking_id = ? and workspace_id = ?`).run(id, this.projectId);
+    this.db.prepare(
+      `delete from run_changes where workspace_id = ?
+       and run_id in (select id from tracking_runs where tracking_id = ?)`,
+    ).run(this.projectId, id);
     const result = this.db.prepare(`delete from trackings where id = ?`).run(id);
     return result.changes > 0;
   }
@@ -827,14 +1028,17 @@ export class Store {
     resultVersion = null,
     result = null,
     sessionId = null,
+    notificationId = null,
+    decisionClass = null,
+    confidence = null,
   }) {
     const ended = nowIso();
     this.db.prepare(
-      `update tracking_runs set ended_at = ?, status = ?, result_version = ?, result_json = ?, message = ?, session_id = ? where id = ?`,
+      `update tracking_runs set ended_at = ?, status = ?, result_version = ?, result_json = ?, message = ?, session_id = ?, notification_id = ?, decision_class = ?, confidence = ? where id = ?`,
     ).run(
       ended, status, resultVersion ?? null,
       result ? JSON.stringify(result) : null,
-      message || "", sessionId, runId,
+      message || "", sessionId, notificationId, decisionClass, confidence, runId,
     );
     const row = this.getTrackingRow(trackingId);
     let next = null;
@@ -886,6 +1090,448 @@ export class Store {
 
   clearTrackingLease(id) {
     this.db.prepare(`update trackings set lease_until = null where id = ?`).run(id);
+  }
+
+  /* ---------- monitor items ---------- */
+
+  monitorItemDto(row) {
+    let source = {};
+    try {
+      source = row.source_json ? JSON.parse(row.source_json) : {};
+    } catch {
+      source = { text: String(row.source_json || "") };
+    }
+    return {
+      id: row.id,
+      trackingId: row.tracking_id,
+      falsifierId: row.falsifier_id,
+      thesisId: row.thesis_id,
+      metric: row.metric,
+      operator: row.operator,
+      warning: row.warning,
+      threshold: row.threshold,
+      unit: row.unit,
+      frequency: row.frequency,
+      source,
+      action: row.action,
+      rationale: row.rationale,
+      status: row.status,
+      lastObserved: row.last_observed,
+      lastCheckedAt: row.last_checked_at,
+      nextCheckAt: row.next_check_at,
+      autonomy: row.autonomy,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  listMonitorItems(trackingId = null) {
+    const rows = trackingId
+      ? this.db.prepare(
+          `select * from monitor_items where workspace_id = ? and tracking_id = ? order by id asc`,
+        ).all(this.projectId, trackingId)
+      : this.db.prepare(
+          `select * from monitor_items where workspace_id = ? order by id asc`,
+        ).all(this.projectId);
+    return rows.map((row) => this.monitorItemDto(row));
+  }
+
+  listDueMonitorItems(now = new Date(), limit = 20) {
+    const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const rows = this.db.prepare(
+      `select mi.* from monitor_items mi
+       join trackings t on t.id = mi.tracking_id
+       where mi.workspace_id = ?
+         and t.workspace_id = mi.workspace_id
+         and t.enabled = 1
+         and mi.status in ('armed', 'warning', 'unknown')
+         and mi.frequency != 'event'
+         and mi.next_check_at is not null
+         and mi.next_check_at <= ?
+         and not exists (
+           select 1 from tracking_runs tr
+           where tr.tracking_id = mi.tracking_id and tr.status = 'running'
+         )
+       order by mi.next_check_at asc, mi.id asc
+       limit ?`,
+    ).all(this.projectId, day, Math.max(1, Math.min(100, Number(limit) || 20)));
+    return rows.map((row) => this.monitorItemDto(row));
+  }
+
+  getMonitorItem(id, trackingId = null) {
+    const row = trackingId
+      ? this.db.prepare(
+          `select * from monitor_items where id = ? and workspace_id = ? and tracking_id = ?`,
+        ).get(id, this.projectId, trackingId)
+      : this.db.prepare(
+          `select * from monitor_items where id = ? and workspace_id = ? limit 1`,
+        ).get(id, this.projectId);
+    return row ? this.monitorItemDto(row) : null;
+  }
+
+  replaceMonitorItems(trackingId, items) {
+    const now = nowIso();
+    this.db.exec("begin");
+    try {
+      this.db.prepare(
+        `delete from monitor_items where tracking_id = ? and workspace_id = ?`,
+      ).run(trackingId, this.projectId);
+      const insert = this.db.prepare(
+        `insert into monitor_items (
+          id, workspace_id, tracking_id, falsifier_id, thesis_id, metric, operator,
+          warning, threshold, unit, frequency, source_json, action, rationale, status,
+          last_observed, last_checked_at, next_check_at, autonomy, created_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      for (const item of items) {
+        insert.run(
+          item.id, this.projectId, trackingId, item.falsifier_id || "", item.thesis_id || "",
+          item.metric || "", item.operator || "", item.warning || "", item.threshold || "",
+          item.unit || "", item.frequency || "monthly",
+          JSON.stringify(item.source || {}), item.action || "", item.rationale || "",
+          item.status || "armed", item.last_observed || "", item.last_checked_at || null,
+          item.next_check_at || null, item.autonomy || "auto_notify", now, now,
+        );
+      }
+      this.db.prepare(
+        `update trackings set contract_version = contract_version + 1 where id = ? and workspace_id = ?`,
+      ).run(trackingId, this.projectId);
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+    return this.listMonitorItems(trackingId);
+  }
+
+  updateMonitorItem(id, patch = {}, trackingId = null) {
+    const row = this.getMonitorItem(id, trackingId);
+    if (!row) return null;
+    const next = {
+      ...row,
+      ...patch,
+      thesisId: patch.thesis_id ?? patch.thesisId ?? row.thesisId,
+      lastObserved: patch.last_observed ?? patch.lastObserved ?? row.lastObserved,
+      lastCheckedAt: patch.last_checked_at ?? patch.lastCheckedAt ?? row.lastCheckedAt,
+      nextCheckAt: patch.next_check_at ?? patch.nextCheckAt ?? row.nextCheckAt,
+    };
+    this.db.prepare(
+      `update monitor_items set thesis_id = ?, metric = ?, operator = ?, warning = ?,
+         threshold = ?, unit = ?, frequency = ?, source_json = ?, action = ?, rationale = ?,
+         status = ?, last_observed = ?, last_checked_at = ?, next_check_at = ?, autonomy = ?,
+         updated_at = ? where id = ? and workspace_id = ? and tracking_id = ?`,
+    ).run(
+      next.thesisId || "", next.metric || "", next.operator || "", next.warning || "",
+      next.threshold || "", next.unit || "", next.frequency || "monthly",
+      JSON.stringify(next.source || {}), next.action || "", next.rationale || "",
+      next.status || "armed", next.lastObserved || "", next.lastCheckedAt || null,
+      next.nextCheckAt || null, next.autonomy || "auto_notify", nowIso(), id, this.projectId,
+      row.trackingId,
+    );
+    return this.getMonitorItem(id, row.trackingId);
+  }
+
+  /* ---------- source bindings / events ---------- */
+
+  sourceBindingDto(row) {
+    return {
+      id: row.id,
+      trackingId: row.tracking_id,
+      monitorItemId: row.monitor_item_id,
+      adapter: row.adapter,
+      query: row.query,
+      sourceTier: row.source_tier,
+      intervalMinutes: row.interval_minutes,
+      nextPollAt: row.next_poll_at,
+      lastPolledAt: row.last_polled_at,
+      enabled: !!row.enabled,
+    };
+  }
+
+  listSourceBindings(trackingId = null) {
+    const rows = trackingId
+      ? this.db.prepare(`select * from source_bindings where workspace_id = ? and tracking_id = ? order by created_at asc`).all(this.projectId, trackingId)
+      : this.db.prepare(`select * from source_bindings where workspace_id = ? order by created_at asc`).all(this.projectId);
+    return rows.map((row) => this.sourceBindingDto(row));
+  }
+
+  replaceSourceBindings(trackingId, bindings = []) {
+    const now = nowIso();
+    this.db.exec("begin");
+    try {
+      this.db.prepare(`delete from source_bindings where tracking_id = ? and workspace_id = ?`).run(trackingId, this.projectId);
+      const insert = this.db.prepare(
+        `insert into source_bindings (
+          id, workspace_id, tracking_id, monitor_item_id, adapter, query, source_tier,
+          interval_minutes, next_poll_at, last_polled_at, enabled, created_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?, ?, ?)`,
+      );
+      for (const binding of bindings) {
+        insert.run(
+          uuid(), this.projectId, trackingId, binding.monitorItemId || null,
+          binding.adapter || "anysearch", binding.query || "", Number(binding.sourceTier) || 3,
+          Math.max(30, Number(binding.intervalMinutes) || 360),
+          binding.nextPollAt || now, binding.enabled === false ? 0 : 1, now, now,
+        );
+      }
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+    return this.listSourceBindings(trackingId);
+  }
+
+  listDueSourceBindings(now = new Date(), limit = 5) {
+    const rows = this.db.prepare(
+      `select sb.* from source_bindings sb
+       join trackings t on t.id = sb.tracking_id
+       where sb.workspace_id = ? and sb.enabled = 1 and t.enabled = 1
+         and sb.next_poll_at is not null and sb.next_poll_at <= ?
+       order by sb.next_poll_at asc limit ?`,
+    ).all(this.projectId, now.toISOString(), Math.max(1, Math.min(50, Number(limit) || 5)));
+    return rows.map((row) => this.sourceBindingDto(row));
+  }
+
+  updateSourceBinding(id, { nextPollAt = null, lastPolledAt = null } = {}) {
+    const now = nowIso();
+    this.db.prepare(
+      `update source_bindings set next_poll_at = coalesce(?, next_poll_at),
+         last_polled_at = coalesce(?, last_polled_at), updated_at = ? where id = ? and workspace_id = ?`,
+    ).run(nextPollAt, lastPolledAt, now, id, this.projectId);
+    const row = this.db.prepare(`select * from source_bindings where id = ? and workspace_id = ?`).get(id, this.projectId);
+    return row ? this.sourceBindingDto(row) : null;
+  }
+
+  createSourceEvent({
+    trackingId = null,
+    monitorItemId = null,
+    adapter = "anysearch",
+    sourceTier = 3,
+    domain = "",
+    url = "",
+    title = "",
+    publishedAt = null,
+    contentHash = "",
+    payload = null,
+    triageStatus = "new",
+    relevance = "",
+  } = {}) {
+    const hash = contentHash
+      || crypto.createHash("sha256").update(`${url}\n${title}`).digest("hex");
+    const existing = this.db.prepare(
+      `select * from source_events where workspace_id = ? and content_hash = ? limit 1`,
+    ).get(this.projectId, hash);
+    if (existing) return { ...this.sourceEventDto(existing), duplicate: true };
+    const id = uuid();
+    const now = nowIso();
+    this.db.prepare(
+      `insert into source_events (
+        id, workspace_id, tracking_id, monitor_item_id, adapter, source_tier, domain,
+        url, title, published_at, fetched_at, content_hash, payload_json,
+        triage_status, relevance, used_in_run_id, created_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?)`,
+    ).run(
+      id, this.projectId, trackingId, monitorItemId, adapter, Number(sourceTier) || 3, domain,
+      url, title, publishedAt, now, hash, payload ? JSON.stringify(payload) : null,
+      triageStatus, relevance, now,
+    );
+    return this.sourceEventDto(this.db.prepare(`select * from source_events where id = ?`).get(id));
+  }
+
+  sourceEventDto(row) {
+    let payload = null;
+    try {
+      payload = row.payload_json ? JSON.parse(row.payload_json) : null;
+    } catch {
+      payload = null;
+    }
+    return {
+      id: row.id,
+      trackingId: row.tracking_id,
+      monitorItemId: row.monitor_item_id,
+      adapter: row.adapter,
+      sourceTier: row.source_tier,
+      domain: row.domain,
+      url: row.url,
+      title: row.title,
+      publishedAt: row.published_at,
+      fetchedAt: row.fetched_at,
+      triageStatus: row.triage_status,
+      relevance: row.relevance,
+      usedInRunId: row.used_in_run_id,
+      payload,
+    };
+  }
+
+  listSourceEvents({ trackingId = null, limit = 30, pendingOnly = false } = {}) {
+    const clauses = ["workspace_id = ?"];
+    const params = [this.projectId];
+    if (trackingId) {
+      clauses.push("tracking_id = ?");
+      params.push(trackingId);
+    }
+    if (pendingOnly) clauses.push("triage_status = 'relevant' and used_in_run_id is null");
+    const rows = this.db.prepare(
+      `select * from source_events where ${clauses.join(" and ")}
+       order by created_at desc limit ?`,
+    ).all(...params, Math.max(1, Math.min(200, Number(limit) || 30)));
+    return rows.map((row) => this.sourceEventDto(row));
+  }
+
+  listPendingRelevantEvents(limit = 20) {
+    const rows = this.db.prepare(
+      `select se.* from source_events se
+       join trackings t on t.id = se.tracking_id
+       where se.workspace_id = ? and se.triage_status = 'relevant'
+         and se.used_in_run_id is null and t.enabled = 1
+       order by se.created_at asc limit ?`,
+    ).all(this.projectId, Math.max(1, Math.min(100, Number(limit) || 20)));
+    return rows.map((row) => this.sourceEventDto(row));
+  }
+
+  markSourceEventsUsed(ids = [], runId = "") {
+    if (!ids.length || !runId) return 0;
+    const placeholders = ids.map(() => "?").join(",");
+    const result = this.db.prepare(
+      `update source_events set used_in_run_id = ? where workspace_id = ? and id in (${placeholders})`,
+    ).run(runId, this.projectId, ...ids);
+    return result.changes;
+  }
+
+  /* ---------- run changes (undo) ---------- */
+
+  recordRunChange({
+    runId,
+    objectType,
+    objectId = "",
+    before = null,
+    after = null,
+    evidenceIds = [],
+    applied = true,
+  }) {
+    const id = uuid();
+    this.db.prepare(
+      `insert into run_changes (
+        id, workspace_id, run_id, object_type, object_id, before_json, after_json,
+        evidence_ids, applied, created_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id, this.projectId, runId, objectType, objectId,
+      before ? JSON.stringify(before) : null,
+      after ? JSON.stringify(after) : null,
+      evidenceIds.length ? JSON.stringify(evidenceIds) : null,
+      applied ? 1 : 0, nowIso(),
+    );
+    return { id, runId, objectType, objectId, before, after };
+  }
+
+  listRunChanges(runId) {
+    const rows = this.db.prepare(
+      `select * from run_changes where workspace_id = ? and run_id = ? order by created_at asc`,
+    ).all(this.projectId, runId);
+    const parse = (value) => {
+      try {
+        return value ? JSON.parse(value) : null;
+      } catch {
+        return null;
+      }
+    };
+    return rows.map((row) => ({
+      id: row.id,
+      runId: row.run_id,
+      objectType: row.object_type,
+      objectId: row.object_id,
+      before: parse(row.before_json),
+      after: parse(row.after_json),
+      evidenceIds: parse(row.evidence_ids) || [],
+      applied: !!row.applied,
+      createdAt: row.created_at,
+    }));
+  }
+
+  markRunChangesReverted(runId) {
+    return this.db.prepare(
+      `update run_changes set applied = 0 where workspace_id = ? and run_id = ?`,
+    ).run(this.projectId, runId).changes;
+  }
+
+  /* ---------- notifications ---------- */
+
+  notificationDto(row) {
+    const parse = (value, fallback) => {
+      try {
+        return value ? JSON.parse(value) : fallback;
+      } catch {
+        return fallback;
+      }
+    };
+    return {
+      id: row.id,
+      trackingId: row.tracking_id,
+      runId: row.run_id,
+      severity: row.severity,
+      title: row.title,
+      body: row.body,
+      changes: parse(row.changes_json, []),
+      actions: parse(row.actions_json, []),
+      readAt: row.read_at,
+      createdAt: row.created_at,
+    };
+  }
+
+  createNotification({
+    trackingId = null,
+    runId = null,
+    severity = "info",
+    title,
+    body = "",
+    changes = [],
+    actions = [],
+  } = {}) {
+    if (!title) throw new Error("notification title is required");
+    const id = uuid();
+    this.db.prepare(
+      `insert into notifications (
+        id, workspace_id, tracking_id, run_id, severity, title, body,
+        changes_json, actions_json, read_at, created_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?)`,
+    ).run(
+      id, this.projectId, trackingId, runId, severity, title, body,
+      JSON.stringify(changes || []), JSON.stringify(actions || []), nowIso(),
+    );
+    return this.notificationDto(
+      this.db.prepare(`select * from notifications where id = ?`).get(id),
+    );
+  }
+
+  listNotifications({ limit = 30, unreadOnly = false, trackingId = null } = {}) {
+    const max = Math.max(1, Math.min(200, Number(limit) || 30));
+    const clauses = ["workspace_id = ?"];
+    const params = [this.projectId];
+    if (unreadOnly) clauses.push("read_at is null");
+    if (trackingId) {
+      clauses.push("tracking_id = ?");
+      params.push(trackingId);
+    }
+    const rows = this.db.prepare(
+      `select * from notifications where ${clauses.join(" and ")}
+       order by created_at desc limit ?`,
+    ).all(...params, max);
+    return rows.map((row) => this.notificationDto(row));
+  }
+
+  markNotificationRead(id) {
+    const result = this.db.prepare(
+      `update notifications set read_at = ? where id = ? and workspace_id = ? and read_at is null`,
+    ).run(nowIso(), id, this.projectId);
+    if (!result.changes) {
+      const row = this.db.prepare(
+        `select * from notifications where id = ? and workspace_id = ?`,
+      ).get(id, this.projectId);
+      return row ? this.notificationDto(row) : null;
+    }
+    const row = this.db.prepare(`select * from notifications where id = ?`).get(id);
+    return row ? this.notificationDto(row) : null;
   }
 
   seedTrackings() {
