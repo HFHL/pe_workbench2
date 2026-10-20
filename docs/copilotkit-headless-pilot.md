@@ -324,3 +324,6 @@ parity 场景（同一 fake Agent fixture，旧/新 transport 分别执行）：
 - 未做 CopilotKit Learning/Telemetry/Thread/Memory 的启用路径；这些能力被明确关闭。
 - 流式过程中只有工具文本行；P1 workbook/approval/tracking 结构化卡在最终规范快照时补齐。最终快照失败时只保留文本/工具行，不保留结构化卡。
 - env 开关开启但 bundle 未构建时，所有会话进入 `unavailable`，聊天被禁用；这是有意的 fail-closed，需要部署前构建。
+- stop 请求失败时 UI 会收敛，但服务端 run 可能仍在执行；立即再次发送可能收到 409，需要重新打开会话或重试 stop。
+- `#abandonRun` 的收尾 `/stop` 没有超时；如果 stop 挂起，最终收敛会被延迟（失败时仍会执行 `#finishRun`）。
+- `runIdOnWire` 的 run-scoping 依赖 Core 在 `onRunFailed` 参数里继续提供 `input.runId`；如果未来 Core 省略该字段，旧的跨 run 延迟失败风险仍在。
