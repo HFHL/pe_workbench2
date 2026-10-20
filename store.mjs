@@ -393,6 +393,39 @@ export class Store {
         unique (ordinal)
       );
 
+      -- UI-only payload for a tool call. Pi's JSONL is conversation truth, but
+      -- details are not guaranteed to survive there; the host persists them so a
+      -- refreshed page can rebuild a rich card. Never injected into agent text.
+      create table if not exists tool_presentations (
+        tool_call_id text not null,
+        workspace_id text not null,
+        thread_id text not null,
+        run_id text not null default '',
+        tool_name text not null default '',
+        schema_name text not null,
+        schema_version integer not null,
+        payload_json text not null,
+        created_at text not null,
+        primary key (workspace_id, tool_call_id)
+      );
+
+      -- A model write is blocked until a human approves the exact proposal.
+      create table if not exists approval_requests (
+        id text primary key,
+        workspace_id text not null,
+        thread_id text not null default '',
+        run_id text not null default '',
+        tracking_id text not null default '',
+        kind text not null,
+        payload_json text not null,
+        status text not null,
+        decision_json text,
+        created_at text not null,
+        decided_at text,
+        applied_at text,
+        updated_at text not null
+      );
+
       create index if not exists idx_materials_updated on materials(workspace_id, updated_at desc);
       create index if not exists idx_versions_material on material_versions(material_id, v desc);
       create index if not exists idx_runs_plan on plan_runs(plan_id, started_at desc);
@@ -405,6 +438,10 @@ export class Store {
       create index if not exists idx_source_bindings_tracking on source_bindings(tracking_id);
       create index if not exists idx_notifications_created on notifications(workspace_id, created_at desc);
       create index if not exists idx_agent_events_thread on agent_events(workspace_id, thread_id, ordinal);
+      create index if not exists idx_tool_presentations_thread on tool_presentations(workspace_id, thread_id, created_at desc);
+      create index if not exists idx_approvals_thread on approval_requests(workspace_id, thread_id, created_at desc);
+      create index if not exists idx_approvals_status on approval_requests(workspace_id, status, created_at desc);
+      create index if not exists idx_approvals_tracking on approval_requests(tracking_id);
     `);
 
     // Older databases predate the project metadata columns.
@@ -568,6 +605,277 @@ export class Store {
       payload,
       createdAt: row.created_at,
     };
+  }
+
+  /* ---------- tool presentations (UI-only payloads) ---------- */
+
+  saveToolPresentation({
+    toolCallId,
+    threadId,
+    runId = "",
+    toolName = "",
+    schemaName,
+    schemaVersion,
+    payload,
+    createdAt = nowIso(),
+  }) {
+    if (!toolCallId || !threadId || !schemaName) {
+      throw new Error("saveToolPresentation requires toolCallId, threadId and schemaName");
+    }
+    this.db.prepare(
+      `insert into tool_presentations (
+         tool_call_id, workspace_id, thread_id, run_id, tool_name,
+         schema_name, schema_version, payload_json, created_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       on conflict (workspace_id, tool_call_id) do update set
+         thread_id = excluded.thread_id,
+         run_id = excluded.run_id,
+         tool_name = excluded.tool_name,
+         schema_name = excluded.schema_name,
+         schema_version = excluded.schema_version,
+         payload_json = excluded.payload_json,
+         created_at = excluded.created_at`,
+    ).run(
+      String(toolCallId),
+      this.projectId,
+      String(threadId),
+      String(runId || ""),
+      String(toolName || ""),
+      String(schemaName),
+      Number(schemaVersion) || 0,
+      JSON.stringify(payload ?? null),
+      createdAt,
+    );
+    return this.getToolPresentation(toolCallId);
+  }
+
+  toolPresentationRecord(row) {
+    let payload = null;
+    let corrupt = false;
+    try {
+      payload = row.payload_json ? JSON.parse(row.payload_json) : null;
+    } catch {
+      corrupt = true;
+    }
+    return {
+      toolCallId: row.tool_call_id,
+      workspaceId: row.workspace_id,
+      threadId: row.thread_id,
+      runId: row.run_id,
+      toolName: row.tool_name,
+      schemaName: row.schema_name,
+      schemaVersion: row.schema_version,
+      payload,
+      corrupt,
+      createdAt: row.created_at,
+    };
+  }
+
+  getToolPresentation(toolCallId) {
+    const row = this.db.prepare(
+      `select * from tool_presentations where workspace_id = ? and tool_call_id = ?`,
+    ).get(this.projectId, String(toolCallId));
+    return row ? this.toolPresentationRecord(row) : null;
+  }
+
+  listToolPresentations({ threadId = null, toolCallIds = null, limit = 500 } = {}) {
+    if (Array.isArray(toolCallIds)) {
+      if (!toolCallIds.length) return [];
+      const placeholders = toolCallIds.map(() => "?").join(",");
+      const rows = this.db.prepare(
+        `select * from tool_presentations
+         where workspace_id = ? and tool_call_id in (${placeholders})`,
+      ).all(this.projectId, ...toolCallIds.map(String));
+      return rows.map((row) => this.toolPresentationRecord(row));
+    }
+    const rows = threadId
+      ? this.db.prepare(
+          `select * from tool_presentations
+           where workspace_id = ? and thread_id = ?
+           order by created_at asc limit ?`,
+        ).all(this.projectId, String(threadId), Math.max(1, Math.min(1000, Number(limit) || 500)))
+      : this.db.prepare(
+          `select * from tool_presentations
+           where workspace_id = ? order by created_at asc limit ?`,
+        ).all(this.projectId, Math.max(1, Math.min(1000, Number(limit) || 500)));
+    return rows.map((row) => this.toolPresentationRecord(row));
+  }
+
+  /* ---------- approval requests ---------- */
+
+  createApprovalRequest({
+    id = null,
+    threadId = "",
+    runId = "",
+    trackingId = "",
+    kind,
+    payload,
+    status = "pending_approval",
+    createdAt = nowIso(),
+  }) {
+    if (!kind) throw new Error("createApprovalRequest requires a kind");
+    const approvalId = id || `apr_${uuid()}`;
+    this.db.prepare(
+      `insert into approval_requests (
+         id, workspace_id, thread_id, run_id, tracking_id, kind, payload_json,
+         status, decision_json, created_at, decided_at, applied_at, updated_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, null, ?, null, null, ?)`,
+    ).run(
+      approvalId,
+      this.projectId,
+      String(threadId || ""),
+      String(runId || ""),
+      String(trackingId || ""),
+      String(kind),
+      JSON.stringify(payload ?? null),
+      String(status),
+      createdAt,
+      createdAt,
+    );
+    return this.getApprovalRequest(approvalId);
+  }
+
+  approvalRecord(row) {
+    let payload = null;
+    let decision = null;
+    let corrupt = false;
+    try {
+      payload = row.payload_json ? JSON.parse(row.payload_json) : null;
+    } catch {
+      corrupt = true;
+    }
+    try {
+      decision = row.decision_json ? JSON.parse(row.decision_json) : null;
+    } catch {
+      decision = { parseError: true };
+    }
+    return {
+      id: row.id,
+      workspaceId: row.workspace_id,
+      threadId: row.thread_id,
+      runId: row.run_id,
+      trackingId: row.tracking_id,
+      kind: row.kind,
+      payload,
+      status: row.status,
+      decision,
+      corrupt,
+      createdAt: row.created_at,
+      decidedAt: row.decided_at,
+      appliedAt: row.applied_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  getApprovalRequest(id) {
+    const row = this.db.prepare(
+      `select * from approval_requests where id = ? and workspace_id = ?`,
+    ).get(String(id), this.projectId);
+    return row ? this.approvalRecord(row) : null;
+  }
+
+  listApprovalRequests({ threadId = null, trackingId = null, status = null, limit = 100 } = {}) {
+    const clauses = ["workspace_id = ?"];
+    const values = [this.projectId];
+    if (threadId) {
+      clauses.push("thread_id = ?");
+      values.push(String(threadId));
+    }
+    if (trackingId) {
+      clauses.push("tracking_id = ?");
+      values.push(String(trackingId));
+    }
+    if (status) {
+      clauses.push("status = ?");
+      values.push(String(status));
+    }
+    values.push(Math.max(1, Math.min(500, Number(limit) || 100)));
+    const rows = this.db.prepare(
+      `select * from approval_requests where ${clauses.join(" and ")}
+       order by created_at desc limit ?`,
+    ).all(...values);
+    return rows.map((row) => this.approvalRecord(row));
+  }
+
+  /**
+   * Atomic compare-and-set used by approve/reject. Returns the updated DTO, or
+   * null when another request already moved the row out of `fromStatuses`.
+   */
+  transitionApproval(id, {
+    fromStatuses,
+    status,
+    decision = null,
+    decidedAt = null,
+    appliedAt = null,
+    payload = undefined,
+  }) {
+    const now = nowIso();
+    const allowed = (Array.isArray(fromStatuses) ? fromStatuses : [fromStatuses]).filter(Boolean);
+    if (!allowed.length) throw new Error("transitionApproval requires fromStatuses");
+    const existing = this.getApprovalRequest(id);
+    const decided = decidedAt
+      || (["applying", "applied"].includes(status) ? existing?.decidedAt || now : now);
+    const placeholders = allowed.map(() => "?").join(",");
+    const setPayload = payload !== undefined ? ", payload_json = ?" : "";
+    const values = [
+      String(status),
+      decision === null ? null : JSON.stringify(decision),
+      decided,
+      appliedAt,
+      now,
+      ...(payload !== undefined ? [JSON.stringify(payload)] : []),
+      String(id),
+      this.projectId,
+      ...allowed,
+    ];
+    const result = this.db.prepare(
+      `update approval_requests set
+         status = ?, decision_json = ?, decided_at = ?, applied_at = ?, updated_at = ?${setPayload}
+       where id = ? and workspace_id = ? and status in (${placeholders})`,
+    ).run(...values);
+    return result.changes > 0 ? this.getApprovalRequest(id) : null;
+  }
+
+  /** After a crash, an `applying` row must never be retried automatically. */
+  recoverApplyingApprovals() {
+    return this.db.prepare(
+      `update approval_requests set
+         status = 'failed',
+         decision_json = ?,
+         decided_at = coalesce(decided_at, ?),
+         updated_at = ?
+       where workspace_id = ? and status = 'applying'`,
+    ).run(
+      JSON.stringify({ reason: "server restarted while applying; regenerate the proposal" }),
+      nowIso(),
+      nowIso(),
+      this.projectId,
+    ).changes;
+  }
+
+  updateTrackingRunResult(runId, {
+    status,
+    message = null,
+    result = null,
+    resultVersion = undefined,
+  } = {}) {
+    const row = this.getTrackingRun(runId);
+    if (!row) return null;
+    this.db.prepare(
+      `update tracking_runs set
+         status = coalesce(?, status),
+         message = coalesce(?, message),
+         result_json = coalesce(?, result_json),
+         result_version = coalesce(?, result_version)
+       where id = ?`,
+    ).run(
+      status || null,
+      message,
+      result ? JSON.stringify(result) : null,
+      resultVersion === undefined ? null : resultVersion,
+      String(runId),
+    );
+    return this.getTrackingRun(runId);
   }
 
   /* ---------- helpers ---------- */
@@ -747,6 +1055,7 @@ export class Store {
         by: version.author,
         note: version.note,
         size: version.size,
+        sha256: version.blob_sha256,
         visibility: version.visibility || "checkpoint",
         runId: version.run_id || null,
         reason: version.reason || null,
@@ -1063,6 +1372,7 @@ export class Store {
       contractVersion: row.contract_version ?? 0,
       monitors: this.listMonitorItems(row.id),
       notifications: this.listNotifications({ trackingId: row.id, limit: 5 }),
+      approvals: this.listApprovalRequests({ trackingId: row.id, limit: 10 }),
     };
   }
 

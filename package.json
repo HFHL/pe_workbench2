@@ -21,7 +21,12 @@
     "test:calc": "node scripts/test-calc-engine.mjs",
     "test:model": "node scripts/test-model-writer.mjs",
     "test:tracking-tool": "node scripts/test-tracking-tool.mjs",
-    "test:protocol": "node scripts/test-protocol.mjs"
+    "test:protocol": "node scripts/test-protocol.mjs",
+    "test:tool-contracts": "node scripts/test-tool-contracts.mjs",
+    "test:approvals": "node scripts/test-approvals.mjs",
+    "test:server": "node scripts/test-server-modules.mjs",
+    "test:e2e": "python3 scripts/test-e2e.py",
+    "test:p1": "node scripts/test-tool-contracts.mjs && node scripts/test-approvals.mjs && node scripts/test-server-modules.mjs && node scripts/test-protocol.mjs"
   },
   "keywords": [],
   "author": "",
