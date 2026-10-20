@@ -221,6 +221,7 @@ async function switchProject(id) {
   closeFile(false);
   closeTask(false);
   runtime.clearCaches?.();
+  runtime.pilot?.resetForProject?.();
   window.Tracking?.reset?.();
   closeStreams();
   resetForProject(project);
@@ -284,6 +285,23 @@ function connectGlobalEvents() {
   openGlobalStream(handleGlobalEvent);
 }
 
+async function installPilotIfRequested(health) {
+  const requestedByUrl = new URLSearchParams(location.search).get('agentTransport') === 'copilotkit';
+  const requestedByEnv = health?.features?.copilotkit === true;
+  if (!requestedByUrl && !requestedByEnv) return;
+  state.agentTransport = 'copilotkit';
+  try {
+    const pilot = await import('./copilot-pilot/pilot.bundle.js');
+    pilot.install();
+  } catch (error) {
+    // Fail closed: never silently fall back to the legacy stream after the
+    // user selected the pilot for this session.
+    state.agentTransport = 'unavailable';
+    console.error('[copilot-pilot] bundle failed to load', error);
+    toast('CopilotKit 试点 bundle 未构建：请运行 npm run build:copilot-pilot');
+  }
+}
+
 async function boot() {
   try {
     const health = await api('/api/health');
@@ -291,6 +309,7 @@ async function boot() {
       state.modelId = health.model;
       $('#modelName').textContent = health.model;
     }
+    await installPilotIfRequested(health);
   } catch {
     toast('本地服务未连接');
     return;
@@ -359,6 +378,14 @@ function openSession(id) {
 }
 
 function connectSession(id) {
+  if (state.agentTransport !== 'legacy') {
+    if (state.agentTransport === 'copilotkit' && runtime.pilot) {
+      void runtime.pilot.connect(id).catch((error) => {
+        toast(error.message || 'CopilotKit 连接失败');
+      });
+    }
+    return;
+  }
   openAgentStream(id, handleServerEvent);
 }
 
@@ -476,21 +503,34 @@ function handleServerEvent(ev) {
   }
 }
 
-async function refreshSnapshot() {
+async function refreshSnapshot({
+  watch = true,
+  forceStopped = false,
+  preserveLive = Boolean(state.streaming),
+  guard = null,
+  throwOnError = false,
+} = {}) {
   const id = state.activeSession;
-  if (!id) return;
+  if (!id) return null;
   try {
     const snap = await api(`/api/sessions/${id}/state`);
-    if (state.activeSession !== id) return;
+    if (state.activeSession !== id) return null;
+    if (guard && !guard()) return null;
     state.messages = snap.messages || [];
     if (Array.isArray(snap.approvals)) {
       const ids = new Set(snap.approvals.map((item) => item.id));
       state.approvals = [...snap.approvals, ...state.approvals.filter((item) => !ids.has(item.id))];
     }
-    state.streaming = !!snap.streaming;
-    state.live = { text: '', tools: [], startedAt: snap.streaming ? Date.now() : 0 };
-    if (snap.streaming) scheduleSnapshotPoll(700);
-    else {
+    state.streaming = forceStopped ? false : !!snap.streaming;
+    if (!preserveLive) {
+      state.live = {
+        text: '',
+        tools: [],
+        startedAt: snap.streaming && !forceStopped ? Date.now() : 0,
+      };
+    }
+    if (!forceStopped && snap.streaming && watch) scheduleSnapshotPoll(700);
+    else if (!snap.streaming || !watch || forceStopped) {
       clearTimeout(snapshotPollTimer);
       snapshotPollTimer = null;
     }
@@ -500,9 +540,12 @@ async function refreshSnapshot() {
     renderAllChrome();
     runtime.resetLive?.();
     renderThread(true);
-  } catch {
+    return snap;
+  } catch (error) {
     runtime.resetLive?.();
     scheduleThread();
+    if (throwOnError) throw error;
+    return null;
   }
 }
 
@@ -547,6 +590,12 @@ async function init() {
 
   $('#stopBtn').addEventListener('click', async () => {
     if (!state.activeSession) return;
+    if (state.agentTransport === 'copilotkit' && runtime.pilot) {
+      try {
+        await runtime.pilot.stop();
+      } catch { /* the snapshot reconciles the UI */ }
+      return;
+    }
     try {
       await api(`/api/sessions/${state.activeSession}/abort`, { method: 'POST' });
     } catch { /* ignore */ }
@@ -785,8 +834,11 @@ Object.assign(runtime, {
   renderTaskDialog,
   loadFoundation,
   syncLiveTicker,
+  syncStop,
   resetLive,
   clearCaches,
+  createSession,
+  connectSession,
 });
 
 // Classic companion scripts (tracking.js, suggestions.js) run before this

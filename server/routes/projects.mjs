@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 
 export async function handleProjects({ req, res, url, app, ctx }) {
   const { json, readJson } = app.http;
-  const { defaultStore, projectManager, ensureProjectDirs, PROJECTS_DIR, MODEL_ID, DEFAULT_PROJECT_ID, ASR_ENABLED, ASR_API_KEY, ASR_API_BASE, ANYSEARCH_QUERY, ANYSEARCH_API_KEY, ANYSEARCH_API_BASE, WEB_FETCH, WEB_FETCH_ALLOW_PRIVATE, CALC_INFO } = app;
+  const { defaultStore, projectManager, ensureProjectDirs, PROJECTS_DIR, MODEL_ID, DEFAULT_PROJECT_ID, ASR_ENABLED, ASR_API_KEY, ASR_API_BASE, ANYSEARCH_QUERY, ANYSEARCH_API_KEY, ANYSEARCH_API_BASE, WEB_FETCH, WEB_FETCH_ALLOW_PRIVATE, CALC_INFO, COPILOTKIT_ENABLED } = app;
   const pathname = url.pathname;
   if (pathname === "/api/health" && req.method === "GET") {
     return json(res, 200, {
@@ -16,6 +16,13 @@ export async function handleProjects({ req, res, url, app, ctx }) {
       trackingScheduler: process.env.TRACKING_SCHEDULER !== "0",
       monitorScheduler: process.env.MONITOR_SCHEDULER !== "0",
       sourceScheduler: process.env.SOURCE_SCHEDULER !== "0",
+      features: {
+        copilotkit: Boolean(COPILOTKIT_ENABLED),
+      },
+      copilotkit: {
+        enabled: Boolean(COPILOTKIT_ENABLED),
+        runtimeUrl: "/api/copilotkit",
+      },
       asr: {
         enabled: ASR_ENABLED,
         configured: Boolean(ASR_API_KEY),

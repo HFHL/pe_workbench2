@@ -9,3 +9,6 @@ data/
 projects/*/.pi/
 projects/*/uploads/
 projects/*/exports/
+
+# Generated CopilotKit pilot bundle (npm run build:copilot-pilot)
+ui/copilot-pilot/pilot.bundle.js

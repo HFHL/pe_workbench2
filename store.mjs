@@ -587,6 +587,16 @@ export class Store {
     return row ? this.agentEventRecord(row) : null;
   }
 
+  /** Newest persisted transport event for a thread, used as a replay cursor. */
+  latestAgentEvent({ workspaceId, threadId } = {}) {
+    const row = this.db.prepare(
+      `select * from agent_events
+       where workspace_id = ? and thread_id = ?
+       order by ordinal desc limit 1`,
+    ).get(workspaceId, threadId);
+    return row ? this.agentEventRecord(row) : null;
+  }
+
   agentEventRecord(row) {
     let payload = {};
     try {
