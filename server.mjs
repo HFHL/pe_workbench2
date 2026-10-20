@@ -42,6 +42,9 @@ import { sofficeInfo } from "./lib/calc-engine.mjs";
 import { notifyDesktop } from "./lib/desktop-notify.mjs";
 import { createTrackingTool } from "./lib/tracking-tool.mjs";
 import { applyModelChanges, prepareWorkingModel } from "./lib/model-writer.mjs";
+import { AgentEventLog } from "./lib/agent-protocol/event-log.mjs";
+import { PiAgUiAdapter } from "./lib/agent-protocol/pi-ag-ui-adapter.mjs";
+import { handleAgUiRequest } from "./lib/agent-protocol/ag-ui-endpoint.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PROJECTS_DIR = path.join(ROOT, "projects");
@@ -169,6 +172,9 @@ async function openProjectContext(row, existingStore = null) {
     projectNote: row.note || "",
     seed: false,
   });
+  // Transport-level replay log for the AG-UI stream. Rows live in this project's
+  // own SQLite file, so two projects can never replay each other's events.
+  const agentEvents = new AgentEventLog({ store, workspaceId: row.id });
   const workbooks = new WorkbookStore({ store });
   const previews = new ExcelPreviewStore({ store });
   const pdfs = new PdfStore({ store });
@@ -232,6 +238,7 @@ async function openProjectContext(row, existingStore = null) {
     sessionsDir: path.join(projectRoot, ".pi", "sessions"),
     uploadsDir: path.join(projectRoot, "uploads"),
     store,
+    agentEvents,
     workbooks,
     previews,
     pdfs,
@@ -707,6 +714,13 @@ async function createEntry({ id, file, ctx }) {
     unsubscribe: null,
   };
   attachEvents(entry);
+  entry.agui = new PiAgUiAdapter({
+    session,
+    threadId: entry.id,
+    workspaceId: ctx.id,
+    log: ctx.agentEvents,
+  });
+  entry.agui.attach();
   live.set(entry.id, entry);
   return entry;
 }
@@ -2182,6 +2196,17 @@ async function handleApi(req, res, url) {
 
   const ctx = projectFor(req, url);
 
+  if (pathname.startsWith("/api/ag-ui/")) {
+    const handled = await handleAgUiRequest(req, res, url, {
+      ctx,
+      json,
+      readJson,
+      resolveThread: (threadId) => ensureEntry(threadId, ctx),
+      createThread: () => createEntry({ id: crypto.randomUUID(), ctx }),
+    });
+    if (handled) return;
+  }
+
   if (pathname === "/api/sessions" && req.method === "GET") {
     return json(res, 200, await listSessions(ctx));
   }
@@ -3080,6 +3105,7 @@ function shutdown() {
   for (const entry of live.values()) {
     try {
       entry.unsubscribe?.();
+      entry.agui?.detach();
       entry.session.dispose();
     } catch {
       /* ignore */

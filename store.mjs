@@ -375,6 +375,24 @@ export class Store {
         updated_at text not null
       );
 
+      -- Transport-level AG-UI event log per thread. It exists so an SSE client
+      -- can replay missed events after a reconnect. It is not a second source
+      -- of truth: conversation history stays in the Pi JSONL session file, and
+      -- domain events (material/tracking/plan/notification) never land here.
+      create table if not exists agent_events (
+        event_id text primary key,
+        workspace_id text not null,
+        thread_id text not null,
+        run_id text not null,
+        sequence integer not null,
+        ordinal integer not null,
+        event_type text not null,
+        payload_json text not null,
+        created_at text not null,
+        unique (run_id, sequence),
+        unique (ordinal)
+      );
+
       create index if not exists idx_materials_updated on materials(workspace_id, updated_at desc);
       create index if not exists idx_versions_material on material_versions(material_id, v desc);
       create index if not exists idx_runs_plan on plan_runs(plan_id, started_at desc);
@@ -386,6 +404,8 @@ export class Store {
       create index if not exists idx_source_bindings_due on source_bindings(enabled, next_poll_at);
       create index if not exists idx_source_bindings_tracking on source_bindings(tracking_id);
       create index if not exists idx_notifications_created on notifications(workspace_id, created_at desc);
+      create index if not exists idx_agent_events_thread on agent_events(workspace_id, thread_id, ordinal);
+      create index if not exists idx_agent_events_run on agent_events(run_id, sequence);
     `);
 
     // Older databases predate the project metadata columns.
@@ -440,6 +460,110 @@ export class Store {
       `update plan_runs set status = 'failed', ended_at = ?, message = '进程重启中断'
        where status = 'running'`,
     ).run(nowIso()).changes;
+  }
+
+  /* ---------- agent protocol event log (transport only) ---------- */
+
+  /**
+   * Append one AG-UI transport event. `sequence` starts at 1 per run and is
+   * allocated by the caller (see lib/agent-protocol/event-log.mjs) so the
+   * event id can embed it; `ordinal` is a per-database monotonic counter used to
+   * replay a whole thread in order. Both counters live in SQLite so a process
+   * restart resumes where it stopped.
+   */
+  appendAgentEvent({ eventId, workspaceId, threadId, runId, sequence, eventType, payload }) {
+    const createdAt = nowIso();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const ordinal = this.db.prepare(
+        `select coalesce(max(ordinal), 0) + 1 as value from agent_events`,
+      ).get().value;
+      try {
+        this.db.prepare(
+          `insert into agent_events
+             (event_id, workspace_id, thread_id, run_id, sequence, ordinal, event_type, payload_json, created_at)
+           values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          eventId,
+          workspaceId,
+          threadId,
+          runId,
+          sequence,
+          ordinal,
+          eventType,
+          JSON.stringify(payload ?? {}),
+          createdAt,
+        );
+        return {
+          eventId,
+          workspaceId,
+          threadId,
+          runId,
+          sequence,
+          ordinal,
+          eventType,
+          payload,
+          createdAt,
+        };
+      } catch (error) {
+        // A concurrent writer (another process on the same DB) can slip in
+        // between the max() read and the insert; the unique constraints are the
+        // authority, so recompute the ordinal and retry.
+        if (attempt === 2 || !/UNIQUE|constraint/i.test(String(error?.message))) throw error;
+      }
+    }
+    return null;
+  }
+
+  nextAgentSequence(runId) {
+    return this.db.prepare(
+      `select coalesce(max(sequence), 0) + 1 as value from agent_events where run_id = ?`,
+    ).get(runId).value;
+  }
+
+  /**
+   * Read transport events for replay. With `runId` the cursor is the run-local
+   * `sequence`; without it the cursor is the thread-wide `ordinal`.
+   */
+  listAgentEvents({ workspaceId, threadId, runId = null, afterSequence = 0, afterOrdinal = 0, limit = 2000 } = {}) {
+    const rows = runId
+      ? this.db.prepare(
+          `select * from agent_events
+           where run_id = ? and sequence > ?
+           order by sequence asc limit ?`,
+        ).all(runId, Number(afterSequence) || 0, limit)
+      : this.db.prepare(
+          `select * from agent_events
+           where workspace_id = ? and thread_id = ? and ordinal > ?
+           order by ordinal asc limit ?`,
+        ).all(workspaceId, threadId, Number(afterOrdinal) || 0, limit);
+    return rows.map((row) => this.agentEventRecord(row));
+  }
+
+  getAgentEvent(eventId, { workspaceId } = {}) {
+    const row = workspaceId
+      ? this.db.prepare(`select * from agent_events where event_id = ? and workspace_id = ?`).get(eventId, workspaceId)
+      : this.db.prepare(`select * from agent_events where event_id = ?`).get(eventId);
+    return row ? this.agentEventRecord(row) : null;
+  }
+
+  agentEventRecord(row) {
+    let payload = {};
+    try {
+      payload = JSON.parse(row.payload_json);
+    } catch {
+      payload = {};
+    }
+    return {
+      eventId: row.event_id,
+      workspaceId: row.workspace_id,
+      threadId: row.thread_id,
+      runId: row.run_id,
+      sequence: row.sequence,
+      ordinal: row.ordinal,
+      eventType: row.event_type,
+      payload,
+      createdAt: row.created_at,
+    };
   }
 
   /* ---------- helpers ---------- */
