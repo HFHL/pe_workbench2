@@ -17,6 +17,7 @@ import { api } from "../api/client.js";
 import { attachAgentSubscriptions, attachCoreSubscriptions } from "./subscriptions.js";
 import {
   metricsSnapshot,
+  newId,
   nowHM,
   parseArgs,
   resultText,
@@ -80,7 +81,9 @@ export class CopilotPilotClient {
     this.connectToken = null;
     this.reconnectTimer = null;
     this.reconnectAttempts = 0;
+    this.reconnectInFlight = false;
     this.runToken = null;
+    this.runIdOnWire = null;
     this.activeRunId = null;
     this.finishedRunId = null;
     this.finalized = false;
@@ -202,6 +205,7 @@ export class CopilotPilotClient {
         if (this.connectActiveRunId && event.runId !== this.connectActiveRunId) return;
         this.activeRunId = event.runId;
         this.finishedRunId = null;
+        this.reconnectAttempts = 0;
         this.metrics.runStarted += 1;
         this.metrics.sendStartedAt = this.metrics.sendStartedAt || performance.now();
         state.streaming = true;
@@ -275,8 +279,11 @@ export class CopilotPilotClient {
         this.metrics.runError += 1;
         this.finalizePromise = this.#finishRun(event.runId, new Error(event.message || "运行失败"));
       },
-      onRunFailed: ({ error }) => {
+      onRunFailed: ({ error, input }) => {
         if (!this.#isCurrent() || !this.acceptEvents || this.finalized) return;
+        // Core's subscriber params carry the run input. Ignore a delayed
+        // failure from a previous send once a new run has started.
+        if (this.runIdOnWire && input?.runId && input.runId !== this.runIdOnWire) return;
         this.metrics.runFailed += 1;
         if (this.expectedAbort || isAbortError(error)) return;
         if (isNetworkError(error)) {
@@ -348,6 +355,7 @@ export class CopilotPilotClient {
     this.connectActiveRunId = null;
     this.finalizePromise = null;
     this.runToken = Symbol("connect");
+    this.runIdOnWire = null;
     agent.threadId = sessionId;
     agent.setMessages([]);
     this.core.setProperties({ projectId: this.projectId, threadId: sessionId });
@@ -450,6 +458,7 @@ export class CopilotPilotClient {
     this.connectActiveRunId = null;
     this.finalizePromise = null;
     this.runToken = Symbol("run");
+    this.runIdOnWire = newId();
     this.acceptEvents = true;
     this.metrics.sendStartedAt = performance.now();
     this.metrics.firstTextAt = 0;
@@ -463,6 +472,7 @@ export class CopilotPilotClient {
     try {
       await this.core.runAgent({
         agent,
+        runId: this.runIdOnWire,
         forwardedProps: {
           projectId: this.projectId,
           attachments: Array.isArray(attachments) ? attachments : [],
@@ -506,6 +516,8 @@ export class CopilotPilotClient {
     } catch (error) {
       this.expectedAbort = false;
       toast(`停止失败：${error?.message || error}`);
+      this.finalizePromise = this.#finishRun(this.activeRunId, null);
+      await this.finalizePromise;
       return;
     }
     this.finalizePromise = this.#finishRun(this.activeRunId, null);
@@ -520,7 +532,17 @@ export class CopilotPilotClient {
     }
   }
 
-  async reconnect({ auto = false } = {}) {
+  async reconnect(options = {}) {
+    if (this.reconnectInFlight) return;
+    this.reconnectInFlight = true;
+    try {
+      return await this.#reconnect(options);
+    } finally {
+      this.reconnectInFlight = false;
+    }
+  }
+
+  async #reconnect({ auto = false } = {}) {
     if (!this.core || !this.agent || !this.sessionId) return;
     if (!auto) this.#resetReconnect();
     this.#clearReconnectTimer();
@@ -562,6 +584,7 @@ export class CopilotPilotClient {
     }
     this.acceptEvents = true;
     this.awaitingReconnect = false;
+    this.reconnectAttempts = 0;
     const token = Symbol("reconnect");
     this.runToken = token;
     const stream = this.core.connectAgent({ agent: this.agent });
@@ -594,6 +617,7 @@ export class CopilotPilotClient {
     this.activeRunId = null;
     this.finishedRunId = null;
     this.finalized = false;
+    this.runIdOnWire = null;
     this.connectActiveRunId = null;
     this.sessionId = null;
     this.finalizePromise = null;
@@ -631,6 +655,16 @@ export class CopilotPilotClient {
 
   /* ---------- internals ---------- */
 
+  async #abandonRun(error) {
+    if (!this.sessionId || !this.#isCurrent()) return;
+    try {
+      await api(`/api/copilotkit/agent/pi/stop/${encodeURIComponent(this.sessionId)}`, { method: "POST" });
+    } catch {
+      /* the final snapshot is still the best available reconciliation */
+    }
+    this.finalizePromise = this.#finishRun(this.activeRunId, error);
+  }
+
   #clearReconnectTimer() {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -648,7 +682,7 @@ export class CopilotPilotClient {
     if (this.reconnectTimer || !this.sessionId || !state.streaming) return;
     if (this.reconnectAttempts >= 5) {
       this.awaitingReconnect = false;
-      this.finalizePromise = this.#finishRun(this.activeRunId, new Error("CopilotKit 重连失败"));
+      void this.#abandonRun(new Error("CopilotKit 重连失败"));
       return;
     }
     const delay = Math.min(1000 * 2 ** this.reconnectAttempts, 8000);
@@ -697,6 +731,7 @@ export class CopilotPilotClient {
     if (runId) this.finishedRunId = runId;
     else if (this.activeRunId) this.finishedRunId = this.activeRunId;
     this.metrics.completedAt = performance.now();
+    this.runIdOnWire = null;
     this.#resetReconnect();
     this.acceptEvents = false;
     this.activeRunId = null;

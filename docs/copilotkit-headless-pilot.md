@@ -108,8 +108,8 @@ ui/copilot-pilot/
 
 | 指标 | 数值 |
 |---|---|
-| `pilot.bundle.js` | 1,055,242 bytes |
-| gzip | 231,739 bytes |
+| `pilot.bundle.js` | 1,055,894 bytes |
+| gzip | 231,867 bytes（Python level 9；Node zlib 约 232.9 KB） |
 | esbuild bundled inputs | 661 |
 | 现有默认 UI JS（15 个模块） | 183,422 bytes / 49,909 bytes gzip |
 
@@ -166,7 +166,7 @@ npm run test:e2e                 # 15 项 P1 浏览器回归
 | 套件 | 结果 |
 |---|---|
 | `test:copilotkit` | 33 passed, 0 failed |
-| `test:copilot-pilot` browser | 17 passed, 0 failed |
+| `test:copilot-pilot` browser | 18 passed, 0 failed |
 | `test:p1` | 173 passed, 0 failed |
 | `test:e2e` | 15 passed, 0 failed |
 
@@ -189,13 +189,15 @@ parity 场景（同一 fake Agent fixture，旧/新 transport 分别执行）：
 - connect 过程中抢跑 send 不启动第二个 run
 - bundle 缺失时 fail-closed
 - pilot 模式下没有旧 Agent SSE
+- stop 失败时 UI 仍能收敛
+- reconnect 尝试计数在成功后复位
 
 ### 7.3 实测数据
 
 | 指标 | 旧 transport | CopilotKit transport |
 |---|---|---|
-| 首段文字到达（stream fixture） | 0.079 s | 0.081 s |
-| 完成时间（stream fixture） | 0.483 s | 0.485 s（含测试固定 300ms settle 等待，仅作相对比较） |
+| 首段文字到达（stream fixture） | 0.077 s | 0.077 s |
+| 完成时间（stream fixture） | 0.484 s | 0.463 s（含测试固定 300ms settle 等待，仅作相对比较） |
 | 最终 assistant 消息数 | 1 | 1 |
 | 重复最终文本 | 0 | 0 |
 | 工具卡数量（tool fixture） | 1 | 1 |
@@ -214,14 +216,14 @@ parity 场景（同一 fake Agent fixture，旧/新 transport 分别执行）：
 
 | 文件 | 行数 |
 |---|---:|
-| `ui/copilot-pilot/client.js` | 766 |
+| `ui/copilot-pilot/client.js` | 801 |
 | `ui/copilot-pilot/message-adapter.js` | 101 |
 | `ui/copilot-pilot/subscriptions.js` | 57 |
 | `ui/copilot-pilot/bootstrap.js` | 48 |
 | `ui/copilot-pilot/entry.js` | 5 |
-| `lib/agent-protocol/copilotkit-endpoint.mjs` | 112 |
+| `lib/agent-protocol/copilotkit-endpoint.mjs` | 114 |
 | `server/routes/copilotkit.mjs` | 18 |
-| 合计 | 1,107 |
+| 合计 | 1,144 |
 
 可删除/简化的旧客户端生命周期代码（估算）：
 
@@ -249,7 +251,7 @@ parity 场景（同一 fake Agent fixture，旧/新 transport 分别执行）：
 不满足/超出阈值：
 
 1. **bundle 与依赖成本明显大于收益**：新增 1.05 MB（231 KB gzip）浏览器 bundle、约 170 个安装包、79 个新 lock 条目；现有默认 UI JS 只有 50 KB gzip。为接管一个普通会话生命周期，代价过高。
-2. **适配复杂度没有低于可删除代码**：新增 1,107 行试点源码，而可删除的旧客户端生命周期约 200–220 行；`client.js` 仍需自行实现 stop、reconnect、active-run 过滤、finalization 和 metrics。
+2. **适配复杂度没有低于可删除代码**：新增 1,144 行试点源码，而可删除的旧客户端生命周期约 200–220 行；`client.js` 仍需自行实现 stop、reconnect、active-run 过滤、finalization 和 metrics。
 3. **reconnect 弱于 P0 的精确增量续传**：Core 不暴露 SSE event id，只能 detach 后重放 active run；长 run 的带宽/重放成本高于 P0 `Last-Event-ID`。
 4. **协议兼容噪音**：P0 事件带 `threadId`/`runId`，Core enforcement 会逐事件剥离并打印 warning；虽无功能影响，但说明两边协议并非完全同构。
 
@@ -304,9 +306,13 @@ parity 场景（同一 fake Agent fixture，旧/新 transport 分别执行）：
 - Medium 6（onRunFailed 不是 run-scoped）：增加 `acceptEvents`/`finalized` 守卫。
 - Medium 8（构建不强制 external）：`build:copilot-pilot` 在 shared UI 模块未全部 external 时直接失败。
 - Low：live `startedAt` 改用 `Date.now()`；工具结果支持 ContentPart[]；health 去掉未使用的 bundle 字段；uninstall 恢复 transport。
-- 未修复并保留为已知限制：M4（流式过程中没有 P1 结构化卡，结束时才由规范快照补齐）、M7（env 开启但未构建时 fail-closed，需要预构建或关闭 env）、M9（stop 失败路径没有自动化浏览器测试）。
+- 第二轮独立复审确认 H1-H3/M1/M2/M5/M8 已修复，并提出 3 个新 Medium：stop 失败后 UI 冻结、reconnect 计数成功后未复位、H2 测试路由缺少 query 通配符。三项均已修复：
+  - stop 失败现在会 toast + `#finishRun` 收敛，不再冻结；新增浏览器测试。
+  - reconnect 成功 attach 时复位 `reconnectAttempts`；重试耗尽会先请求 `/stop` 再收敛。
+  - H2 测试改为 `**/api/sessions/*/state*`，确认真正拦截 snapshot 请求并走 `#commitLive`。
+- 仍未修复：M4（流式过程中没有 P1 结构化卡）、M7（env 开启但未构建时 fail-closed）、M6 的极端跨 run 延迟失败（已加 runId 过滤，但 Core 的 connect 失败无 run 关联）。这些写入了已知限制。
 
-复审在提交后由同一独立审查会话针对固定 commit 重新执行；结果见交付说明。
+最终复审结论：独立审查会话在固定 commit 上确认修复；完整复审记录见交付说明。Go/No-Go 仍为 No-Go。
 
 ## 12. 已知限制 / 未验证
 

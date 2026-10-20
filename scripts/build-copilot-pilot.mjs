@@ -30,6 +30,7 @@ const SHARED_UI_MODULES = [
 const result = await build({
   entryPoints: [ENTRY],
   outfile: OUTFILE,
+  write: false,
   bundle: true,
   format: "esm",
   platform: "browser",
@@ -43,22 +44,23 @@ const result = await build({
   define: { "process.env.NODE_ENV": '"production"' },
 });
 
-const bytes = fs.statSync(OUTFILE).size;
-const gzip = zlib.gzipSync(fs.readFileSync(OUTFILE)).length;
-const text = fs.readFileSync(OUTFILE, "utf8");
+const text = result.outputFiles?.[0]?.text || "";
 const externalCount = SHARED_UI_MODULES.filter((mod) => text.includes(`from"${mod}"`)).length;
-
-console.log(`\nCopilotKit pilot bundle: ${OUTFILE}`);
-console.log(`  bytes: ${bytes} (${(bytes / 1024).toFixed(1)} KiB)`);
-console.log(`  gzip:  ${gzip} (${(gzip / 1024).toFixed(1)} KiB)`);
-console.log(`  shared UI modules kept external: ${externalCount}/${SHARED_UI_MODULES.length}`);
-console.log(`  bundled inputs: ${Object.keys(result.metafile.inputs).length}`);
 if (externalCount !== SHARED_UI_MODULES.length) {
   throw new Error(
     `pilot bundle inlined a shared UI module (${externalCount}/${SHARED_UI_MODULES.length}); ` +
     "that would create a second state/store instance. Check the external list.",
   );
 }
+fs.writeFileSync(OUTFILE, text);
+
+const bytes = Buffer.byteLength(text);
+const gzip = zlib.gzipSync(text).length;
+console.log(`\nCopilotKit pilot bundle: ${OUTFILE}`);
+console.log(`  bytes: ${bytes} (${(bytes / 1024).toFixed(1)} KiB)`);
+console.log(`  gzip:  ${gzip} (${(gzip / 1024).toFixed(1)} KiB)`);
+console.log(`  shared UI modules kept external: ${externalCount}/${SHARED_UI_MODULES.length}`);
+console.log(`  bundled inputs: ${Object.keys(result.metafile.inputs).length}`);
 
 for (const marker of ["https://api.deepseek.com", "https://telemetry.copilotkit.ai", "https://cdn.copilotkit.ai"]) {
   if (text.includes(marker)) console.log(`  note: bundle contains literal ${marker} (not necessarily a request)`);

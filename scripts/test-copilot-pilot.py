@@ -331,7 +331,7 @@ def run(ui: UI) -> None:
 
     def snapshot_failure():
         ui.reset(True)
-        pattern = "**/api/sessions/*/state"
+        pattern = "**/api/sessions/*/state*"
         ui.page.route(pattern, lambda route: route.abort())
         try:
             ui.send("快照失败 [scenario:stream]")
@@ -373,6 +373,27 @@ def run(ui: UI) -> None:
         ui.assert_no_page_errors()
 
     check("abort stops the run and the same session accepts a new prompt", abort_and_reuse)
+
+    print("\nstop failure")
+
+    def stop_failure():
+        ui.reset(True)
+        pattern = "**/api/copilotkit/agent/pi/stop/*"
+        ui.page.route(pattern, lambda route: route.abort())
+        try:
+            ui.send("停止失败 [scenario:slow]")
+            ui.page.wait_for_timeout(700)
+            ui.page.click("#stopBtn")
+            ui.page.wait_for_timeout(500)
+            assert "停止失败" in ui.page.locator("#toast").inner_text()
+            ui.settle(timeout=10000)
+            assert ui.page.evaluate("() => state.streaming") is False
+        finally:
+            ui.page.unroute(pattern)
+        ui.errors = [error for error in ui.errors if "Failed to fetch" not in error and "net::" not in error]
+        ui.assert_no_page_errors(allow_network=True)
+
+    check("a failed stop reconciles the UI instead of freezing", stop_failure)
 
     print("\nrefresh during an active run")
 
