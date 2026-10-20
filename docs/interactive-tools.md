@@ -79,6 +79,8 @@ pending_approval ──reject──► rejected
 - `reject` 不写文件、不产生版本；`decision_json` 保存拒绝时间和原因。
 - approve/reject 幂等；`applying` 期间服务重启会恢复为 `failed`，不会自动重试。
 - 只有 apply 成功才调用 `applyModelChanges`（备份 → LibreOffice 重算 → 输出校验 → 新版本），随后更新 tracking run、approval，并广播 approval/tracking/material。
+- 会话的 `beforeToolCall` 会阻止 Agent 直接 `write`/`edit` 任何 `**/model/*.xlsx`；工作模型只能由审批服务写入。
+- 审批使用进程内按工作模型路径的互斥锁，并在 apply 前重新读取 `analysis-state.json`、重新计算文件 sha；LibreOffice 是否可用也在 approve 时重新检查。
 
 接口：
 

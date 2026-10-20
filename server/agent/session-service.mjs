@@ -61,6 +61,13 @@ export function createSessionService({
 
   function blockOutsideProject(ctx, toolName, args) {
     if (!args || typeof args !== "object") return null;
+    if (
+      toolName === "bash"
+      && typeof args.command === "string"
+      && /(?:^|[/\s])model[/\\][^\s]+\.(?:xlsx|xlsm)|工作模型\.xlsx/i.test(args.command)
+    ) {
+      return { block: true, reason: "工作模型只能通过人工审批写入" };
+    }
     const candidate = args.path;
     if (typeof candidate !== "string" || !candidate) return null;
     const root = path.resolve(ctx.root);

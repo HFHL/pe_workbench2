@@ -236,6 +236,21 @@ await run("concurrent approve applies exactly once", async () => {
   assert.equal(record.status, "applied");
 });
 
+await run("approve while applying returns pending, not success", async () => {
+  const { proposal } = await createProposal(120);
+  store.transitionApproval(proposal.approval.id, {
+    fromStatuses: ["pending_approval"],
+    status: "applying",
+    decision: { approvedAt: new Date().toISOString(), by: "test" },
+  });
+  const before = versions();
+  const result = await service.approve({ ctx, id: proposal.approval.id });
+  assert.equal(result.ok, true);
+  assert.equal(result.httpStatus, 202);
+  assert.equal(result.pending, true);
+  assert.equal(versions(), before);
+});
+
 console.log("\nreject");
 await run("reject writes no version and stores the reason", async () => {
   const { proposal } = await createProposal();
@@ -249,6 +264,12 @@ await run("reject writes no version and stores the reason", async () => {
   const again = await service.reject({ ctx, id: proposal.approval.id, reason: "again" });
   assert.equal(again.already, true);
   assert.equal(versions(), before);
+  const run = store.getTrackingRun(proposal.approval.runId);
+  assert.equal(run.status, "needs_review");
+  assert.equal(run.message, "模型变更已拒绝");
+  const stored = JSON.parse(run.result_json);
+  assert.equal(stored.writeback.approval.status, "rejected");
+  assert.match(stored.writeback.note, /文件未修改/);
 });
 
 await run("approved request cannot be rejected", async () => {
