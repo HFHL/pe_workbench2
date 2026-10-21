@@ -744,6 +744,7 @@ async function testAdapter() {
       },
       locate: (eventId) => memory.locate(eventId),
       list: (options) => memory.list(options),
+      discardRun: (options) => memory.discardRun(options),
       records: memory.records,
     };
     const session = new FakePiSession({
@@ -765,6 +766,39 @@ async function testAdapter() {
     );
     check("failed run remains live-only", seen.every((record) => record.persisted === false));
     check("partial failed run is not persisted", memory.records.length === 0, String(memory.records.length));
+  }
+
+  // 8d. an already-persisted prefix is removed when a later append fails
+  {
+    const memory = new MemoryAgentEventLog({ workspaceId: "p1" });
+    const brokenLog = {
+      append(args) {
+        if (args.eventType === EventType.TEXT_MESSAGE_START) throw new Error("disk full");
+        return memory.append(args);
+      },
+      locate: (eventId) => memory.locate(eventId),
+      list: (options) => memory.list(options),
+      discardRun: (options) => memory.discardRun(options),
+      get records() { return memory.records; },
+    };
+    const session = new FakePiSession({
+      script: async ({ emit }) => {
+        emit({ type: "agent_start" });
+        const message = assistantMessage();
+        emit({ type: "message_start", message });
+        emit(delta(message, "never persisted"));
+        emit({ type: "agent_settled", aborted: false });
+      },
+    });
+    const adapter = new PiAgUiAdapter({ session, threadId: "t-prefix-disk", workspaceId: "p1", log: brokenLog });
+    const seen = [];
+    adapter.subscribeEvents((record) => seen.push(record));
+    await adapter.runPrompt("hi");
+    await session.lastRun;
+    await waitFor(() => !adapter.isRunning, { label: "persisted-prefix failure" });
+    check("persisted-prefix failure ends with RUN_ERROR", seen.at(-1)?.eventType === EventType.RUN_ERROR);
+    check("persisted prefix is discarded", memory.records.length === 0, String(memory.records.length));
+    check("discarded prefix cannot be located", memory.locate(seen[0]?.eventId) === null);
   }
 
   // 9. one run at a time per thread
@@ -852,6 +886,10 @@ async function testSqliteLog() {
     check("replay after restart keeps payload", replayed[1].payload.delta === "1");
     const afterId = reopened.list({ threadId: "thread-db", afterOrdinal: replayed.at(-1).ordinal });
     check("thread replay continues across runs", afterId.length === 1 && afterId[0].runId === "run-db-2");
+    const removed = reopened.discardRun({ threadId: "thread-db", runId: "run-db" });
+    check("discard removes an incomplete SQLite run", removed === records.length, String(removed));
+    check("discard keeps other runs", reopened.list({ threadId: "thread-db" }).length === 1);
+    check("discarded SQLite event cannot be located", reopened.locate(records[0].eventId) === null);
     store.db.close();
 
     // Two projects with separate databases cannot read each other's events.
