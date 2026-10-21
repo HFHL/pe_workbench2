@@ -89,6 +89,20 @@ function perShareUnit(unit) {
   return typeof unit === "string" && /(?:\/\s*股|per\s*share|share)/i.test(unit);
 }
 
+function currencyFromUnit(unit) {
+  if (typeof unit !== "string") return null;
+  const raw = unit.trim();
+  const isoCode = raw.match(/\b([A-Z]{3})\b/)?.[1] || null;
+  if (isoCode === "RMB") return "CNY";
+  if (isoCode) return isoCode;
+  if (/港元|港币/.test(raw)) return "HKD";
+  if (/美元/.test(raw)) return "USD";
+  if (/欧元/.test(raw)) return "EUR";
+  if (/日元/.test(raw)) return "JPY";
+  if (/英镑/.test(raw)) return "GBP";
+  return null;
+}
+
 function trackingSourceRef({ trackingId, runId }) {
   return {
     kind: "run",
@@ -295,10 +309,19 @@ function valuationSummary({ state, stateVersion, target, modelMaterial, run, res
   const targetPrice = runTarget !== null ? runTarget : stateTarget;
   const currentPrice = num(state?.market?.price);
   const unit = nullableText(base?.unit || state?.subject?.units, 100);
+  const currency = /^[A-Z]{3}$/.test(String(state?.subject?.currency || ""))
+    ? String(state.subject.currency)
+    : null;
   // A model output does not make a total-value unit comparable to a per-share
   // market price. Only per-share units may feed the upside calculation.
   const priceUnit = perShareUnit(unit) ? unit : null;
-  const canCompute = currentPrice !== null && targetPrice !== null && priceUnit && currentPrice !== 0;
+  const explicitUnitCurrency = currencyFromUnit(priceUnit);
+  const sameCurrency = Boolean(currency) && (!explicitUnitCurrency || explicitUnitCurrency === currency);
+  const canCompute = currentPrice !== null
+    && targetPrice !== null
+    && Boolean(priceUnit)
+    && currentPrice !== 0
+    && sameCurrency;
   const upsidePercent = canCompute
     ? Math.round(((targetPrice - currentPrice) / currentPrice) * 10000) / 100
     : null;
@@ -308,6 +331,10 @@ function valuationSummary({ state, stateVersion, target, modelMaterial, run, res
   if (currentPrice === null) unknowns.push("缺少 currentPrice（现价）；未知不会按 0 处理。");
   if (targetPrice === null) unknowns.push("缺少 targetPrice（目标价）；未从格式化字符串反推。");
   if (targetPrice !== null && !priceUnit) unknowns.push("估值单位不是每股口径，无法安全计算上行空间。");
+  if (!currency) unknowns.push("缺少合法的现价币种，无法确认现价与目标价可比。");
+  if (currency && explicitUnitCurrency && explicitUnitCurrency !== currency) {
+    unknowns.push(`估值单位币种 ${explicitUnitCurrency} 与现价币种 ${currency} 不一致；未执行汇率换算。`);
+  }
   if (currentPrice !== null && targetPrice !== null && currentPrice === 0) unknowns.push("现价为 0，无法计算上行空间。");
   if (!base && !runOutput) unknowns.push("状态文件没有 base 情景估值。");
   if (unknowns.length && upsidePercent === null && canCompute === false) {
@@ -350,9 +377,7 @@ function valuationSummary({ state, stateVersion, target, modelMaterial, run, res
   return {
     company: text(state?.subject?.company || target?.name || "未知公司", 1000),
     asOf: iso(base?.as_of || state?.subject?.valuation_date || run?.ended_at || run?.started_at),
-    currency: /^[A-Z]{3}$/.test(String(state?.subject?.currency || ""))
-      ? String(state.subject.currency)
-      : null,
+    currency,
     valueUnit: unit,
     priceUnit,
     method: nullableText(base?.method || (runOutput ? `工作模型 · ${runOutput.label}` : null), 300),

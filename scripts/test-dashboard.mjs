@@ -361,6 +361,33 @@ async function seed() {
 
   local.full = { tracking, run1, run2, report, result1, result2 };
   local.unit = { tracking: unitTracking, run: unitRun, report: unitReport };
+
+  // Explicitly mismatched currencies must not be divided as if comparable.
+  fs.mkdirSync(path.join(ctx.root, "exports", "dash-currency"), { recursive: true });
+  const currencyRel = "exports/dash-currency/report.md";
+  const currencyStateRel = "exports/dash-currency/analysis-state.json";
+  fs.writeFileSync(path.join(ctx.root, currencyRel), "# Currency report\n");
+  const currencyReport = ctx.store.indexFile(currencyRel, { source: "agent" });
+  const currencyState = makeState({ targetPrice: 97 });
+  currencyState.subject.units = "USD/share";
+  currencyState.valuations = currencyState.valuations.map((item) => ({ ...item, unit: "USD/share" }));
+  fs.writeFileSync(path.join(ctx.root, currencyStateRel), `${JSON.stringify(currencyState, null, 2)}\n`);
+  ctx.store.indexFile(currencyStateRel, { source: "agent", visibility: "internal" });
+  const currencyTracking = ctx.store.createTracking({
+    targetId: currencyReport.id, templateId: "framework", freq: "weekly", weekday: 1, time: "09:00",
+  });
+  const currencyRun = ctx.store.startTrackingRun(currencyTracking.id, { trigger: "manual", baseVersion: 1 });
+  fs.writeFileSync(path.join(ctx.root, currencyRel), "# Currency report v2\n");
+  ctx.store.indexFile(currencyRel, { source: "agent", runId: currencyRun.id });
+  ctx.store.indexFile(currencyStateRel, { source: "agent", visibility: "internal", runId: currencyRun.id });
+  const currencyResult = makeResult({
+    trackingId: currencyTracking.id, targetId: currencyReport.id, targetPath: currencyRel,
+    runId: currencyRun.id, baseVersion: 1, resultVersion: 2, status: "updated", headline: "跨币种估值测试",
+  });
+  ctx.store.finishTrackingRun(currencyTracking.id, currencyRun.id, {
+    status: "updated", message: "币种测试", resultVersion: 2, result: currencyResult,
+  });
+  local.currency = { tracking: currencyTracking, run: currencyRun, report: currencyReport };
   local.stable = { tracking: stable, run: stableRun, report: stableReport };
   local.audit = { tracking: audit, run: auditRun, report: auditReport };
   local.noChange = { tracking: noChange, run: noChangeRun, report: noChangeReport };
@@ -535,6 +562,18 @@ async function main() {
     assert.equal(valuation.priceUnit, null);
     assert.equal(valuation.upsidePercent, null);
     assert.ok(valuation.unknowns.some((item) => /非每股|每股口径/.test(item)), valuation.unknowns);
+  });
+
+  await run("mismatched explicit currencies never produce an upside percentage", async () => {
+    const { res, json } = await getJson(`/api/trackings/${local.currency.tracking.id}/dashboard`);
+    assert.equal(res.status, 200);
+    const valuation = section(json, "valuation-summary");
+    assert.equal(valuation.currency, "CNY");
+    assert.equal(valuation.priceUnit, "USD/share");
+    assert.equal(valuation.currentPrice, 78);
+    assert.equal(valuation.targetPrice, 97);
+    assert.equal(valuation.upsidePercent, null);
+    assert.ok(valuation.unknowns.some((item) => /USD.*CNY.*不一致/.test(item)), valuation.unknowns);
   });
 
   await run("target price matches the run output and keeps its cell locator", async () => {
