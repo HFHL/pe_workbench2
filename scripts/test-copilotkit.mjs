@@ -15,6 +15,8 @@ import net from "node:net";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import { toolStatusFromResult } from "../ui/copilot-pilot/message-adapter.js";
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 let passed = 0;
 let failed = 0;
@@ -196,6 +198,28 @@ async function main() {
     });
     const afterEvents = await readSse(afterRes);
     check("afterEventId suppresses the replayed run", afterEvents.length === 0, JSON.stringify(afterEvents));
+
+    console.log("\nstandard tool error propagation");
+    const errorRes = await fetch(`${base}/api/copilotkit/agent/pi/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({
+        threadId: sessionId,
+        messages: [{ role: "user", content: "missing workbook [scenario:tool-error]" }],
+        forwardedProps: { projectId: "product-eng" },
+      }),
+    });
+    const errorEvents = await readSse(errorRes);
+    const toolError = errorEvents.find((event) => event.type === "TOOL_CALL_RESULT");
+    check(
+      "tool failure is encoded in standard content",
+      toolError?.content === "Error: No such workbook: uploads/missing.xlsx",
+      JSON.stringify(toolError),
+    );
+    check(
+      "client recognizes failure without the extension field",
+      toolStatusFromResult(toolError?.content) === "error",
+    );
 
     console.log("\nproject isolation and errors");
     const foreign = await fetch(`${base}/api/copilotkit/agent/pi/run`, {

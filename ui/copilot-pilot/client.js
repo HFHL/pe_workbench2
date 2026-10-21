@@ -263,7 +263,9 @@ export class CopilotPilotClient {
         this.#upsertTool({
           id: event.toolCallId,
           name: this.#findTool(event.toolCallId)?.name || "tool",
-          status: toolStatusFromResult(content, event.isError),
+          // AG-UI has no standard isError field and Core intentionally drops
+          // extensions. The P0 adapter preserves failure in content as Error:.
+          status: toolStatusFromResult(content),
           output: content,
         });
       },

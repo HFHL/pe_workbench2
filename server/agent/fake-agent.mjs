@@ -284,7 +284,9 @@ class FakeSession {
         await this.toolCall({
           name: "workbook_query",
           args: { path: "uploads/missing.xlsx", query: "Revenue" },
-          details: { text: "workbook_query 失败：文件不存在" },
+          // Deliberately contains no "failed"/"失败" keyword: the protocol
+          // adapter must carry the error semantic through standard content.
+          details: { text: "No such workbook: uploads/missing.xlsx" },
           isError: true,
         });
         await this.textMessage("工具失败了，文件可能不在项目里。", { delay: 8 });
