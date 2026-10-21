@@ -363,6 +363,30 @@ await run("missing output cell is a conflict, not a write", async () => {
   assert.equal(versions(), before);
 });
 
+await run("unexpected write exception is reflected in the tracking result", async () => {
+  const { proposal } = await createProposal();
+  const throwingService = createApprovalService({
+    store,
+    broadcast: () => {},
+    applyModelChanges: async () => { throw new Error("simulated writer crash"); },
+    libreOfficeAvailable: true,
+  });
+  const before = versions();
+  const result = await throwingService.approve({ ctx, id: proposal.approval.id });
+  assert.equal(result.ok, false);
+  assert.equal(result.httpStatus, 500);
+  assert.equal(result.code, "apply_error");
+  assert.equal(result.approval.status, "failed");
+  assert.equal(versions(), before);
+  const run = store.getTrackingRun(proposal.approval.runId);
+  assert.equal(run.status, "needs_review");
+  assert.equal(run.message, "模型写回失败");
+  const stored = JSON.parse(run.result_json);
+  assert.equal(stored.writeback.approval.status, "failed");
+  assert.match(stored.writeback.approval.reason, /simulated writer crash/);
+  assert.match(stored.writeback.note, /模型写回失败/);
+});
+
 await run("tracking settlement creates a proposal instead of writing", async () => {
   const before = versions();
   const run = store.startTrackingRun(tracking.id, { trigger: "manual", baseVersion: target.versions[0].v });
