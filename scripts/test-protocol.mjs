@@ -324,6 +324,7 @@ function testStateMachine() {
     abnormalTypes.join(","),
   );
   check("synthetic tool result is marked as error", abnormal.at(-2).isError === true);
+  check("synthetic tool error survives standard-only clients", abnormal.at(-2).content.startsWith("Error: "));
   check("RUN_ERROR is last", abnormalTypes.at(-1) === EventType.RUN_ERROR);
   check("machine remembers terminal state", crashed.isTerminal && crashed.snapshot().openToolCalls.length === 0);
 
@@ -482,7 +483,8 @@ async function testAdapter() {
     assertRunInvariants("tool failure", records);
     const result = records.find((record) => record.eventType === EventType.TOOL_CALL_RESULT);
     check("failed tool result is marked", result.payload.isError === true);
-    check("failed tool keeps its text", result.payload.content === "permission denied");
+    check("failed tool keeps its text", result.payload.content === "Error: permission denied");
+    check("failed tool error survives extension stripping", /^Error:/.test(result.payload.content));
     check("tool failure does not fail the run", typesOf(records).at(-1) === EventType.RUN_FINISHED);
   }
 
@@ -730,6 +732,39 @@ async function testAdapter() {
       JSON.stringify({ type: terminal?.eventType, persisted: terminal?.persisted }),
     );
     check("unpersisted terminal is not replayed", memory.records.every((record) => record.eventType !== EventType.RUN_FINISHED));
+  }
+
+  // 8c. a non-terminal persistence failure still closes the live run
+  {
+    const memory = new MemoryAgentEventLog({ workspaceId: "p1" });
+    const brokenLog = {
+      append(args) {
+        if (args.eventType === EventType.RUN_STARTED) throw new Error("disk full");
+        return memory.append(args);
+      },
+      locate: (eventId) => memory.locate(eventId),
+      list: (options) => memory.list(options),
+      records: memory.records,
+    };
+    const session = new FakePiSession({
+      script: async ({ emit }) => {
+        emit({ type: "agent_start" });
+        emit({ type: "agent_settled", aborted: false });
+      },
+    });
+    const adapter = new PiAgUiAdapter({ session, threadId: "t-start-disk", workspaceId: "p1", log: brokenLog });
+    const seen = [];
+    adapter.subscribeEvents((record) => seen.push(record));
+    await adapter.runPrompt("hi");
+    await session.lastRun;
+    await waitFor(() => !adapter.isRunning, { label: "non-terminal persistence failure" });
+    check(
+      "non-terminal persistence failure emits a live terminal",
+      typesOf(seen).join(",") === "RUN_STARTED,RUN_ERROR",
+      typesOf(seen).join(","),
+    );
+    check("failed run remains live-only", seen.every((record) => record.persisted === false));
+    check("partial failed run is not persisted", memory.records.length === 0, String(memory.records.length));
   }
 
   // 9. one run at a time per thread
