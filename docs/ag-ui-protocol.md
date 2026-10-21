@@ -35,14 +35,14 @@
 | assistant `message_end` | `TEXT_MESSAGE_END` | 无增量时用最终 content 补发一次 |
 | `tool_execution_start` | `TOOL_CALL_START` + `TOOL_CALL_ARGS` | args 为 JSON 字符串 |
 | `tool_execution_update` | `CUSTOM`（`pi.tool_progress`） | 不干扰标准工具事件；`value.content` 是**累计快照**，不是 delta |
-| `tool_execution_end` | `TOOL_CALL_END` + `TOOL_CALL_RESULT` | 顺序固定；`isError` 为扩展字段 |
+| `tool_execution_end` | `TOOL_CALL_END` + `TOOL_CALL_RESULT` | 顺序固定；失败结果的标准 `content` 以 `Error:` 开头，`isError` 为兼容扩展字段 |
 | `agent_settled` | `RUN_FINISHED` | 关闭未闭合消息/工具后再发 |
 | prompt 异常 / 适配器异常 / `stopReason: "error"` | `RUN_ERROR` | 同样先补齐未闭合项 |
 | abort | `RUN_FINISHED`（`result.aborted = true`） | 之后的事件一律丢弃 |
 
 `agent_end`、`turn_*`、`compaction_*`、`queue_update` 不进入 AG-UI；它们仍走旧 SSE。
 
-**扩展字段**：`TOOL_CALL_RESULT.isError`（AG-UI 原生没有工具错误位）；`RUN_FINISHED.result.aborted`。
+**扩展字段**：`TOOL_CALL_RESULT.isError`（AG-UI 原生没有工具错误位）；`RUN_FINISHED.result.aborted`。标准消费者可能丢弃扩展字段，因此失败结果同时通过 `content: "Error: ..."` 保留错误语义。
 
 ## 4. 状态机（`run-state-machine.mjs`）
 
