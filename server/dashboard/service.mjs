@@ -92,7 +92,7 @@ function perShareUnit(unit) {
 function currencyFromUnit(unit) {
   if (typeof unit !== "string") return null;
   const raw = unit.trim();
-  const isoCode = raw.match(/\b([A-Z]{3})\b/)?.[1] || null;
+  const isoCode = raw.toUpperCase().match(/\b([A-Z]{3})\b/)?.[1] || null;
   if (isoCode === "RMB") return "CNY";
   if (isoCode) return isoCode;
   if (/港元|港币/.test(raw)) return "HKD";

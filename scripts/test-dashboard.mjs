@@ -369,8 +369,8 @@ async function seed() {
   fs.writeFileSync(path.join(ctx.root, currencyRel), "# Currency report\n");
   const currencyReport = ctx.store.indexFile(currencyRel, { source: "agent" });
   const currencyState = makeState({ targetPrice: 97 });
-  currencyState.subject.units = "USD/share";
-  currencyState.valuations = currencyState.valuations.map((item) => ({ ...item, unit: "USD/share" }));
+  currencyState.subject.units = "usd/share";
+  currencyState.valuations = currencyState.valuations.map((item) => ({ ...item, unit: "usd/share" }));
   fs.writeFileSync(path.join(ctx.root, currencyStateRel), `${JSON.stringify(currencyState, null, 2)}\n`);
   ctx.store.indexFile(currencyStateRel, { source: "agent", visibility: "internal" });
   const currencyTracking = ctx.store.createTracking({
@@ -569,7 +569,7 @@ async function main() {
     assert.equal(res.status, 200);
     const valuation = section(json, "valuation-summary");
     assert.equal(valuation.currency, "CNY");
-    assert.equal(valuation.priceUnit, "USD/share");
+    assert.equal(valuation.priceUnit, "usd/share");
     assert.equal(valuation.currentPrice, 78);
     assert.equal(valuation.targetPrice, 97);
     assert.equal(valuation.upsidePercent, null);
