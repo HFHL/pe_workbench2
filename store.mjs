@@ -561,6 +561,13 @@ export class Store {
         ).get(runId).value;
   }
 
+  deleteAgentEvents({ workspaceId, threadId, runId }) {
+    if (!workspaceId || !threadId || !runId) return 0;
+    return this.db.prepare(
+      `delete from agent_events where workspace_id = ? and thread_id = ? and run_id = ?`,
+    ).run(workspaceId, threadId, runId).changes;
+  }
+
   /**
    * Read transport events for replay. With `runId` the cursor is the run-local
    * `sequence`; without it the cursor is the thread-wide `ordinal`.
