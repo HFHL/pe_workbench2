@@ -53,6 +53,7 @@ import { handleCopilotKit } from "./routes/copilotkit.mjs";
 import { handleSessions } from "./routes/sessions.mjs";
 import { handleMaterials } from "./routes/materials.mjs";
 import { handleTracking } from "./routes/tracking.mjs";
+import { handleTrace } from "./routes/trace.mjs";
 import { handlePlans } from "./routes/plans.mjs";
 import { handleTesting } from "./routes/testing.mjs";
 
@@ -201,6 +202,27 @@ async function maybeMaterialSaved(entry, toolName, args) {
 }
 
 
+async function maybeRunSettled(entry, { changedFiles = [], aborted = false, runId = null } = {}) {
+  if (aborted || !entry?.ctx?.trace || !changedFiles.length) return null;
+  try {
+    const appended = entry.ctx.trace.recordRun({
+      sessionId: entry.id,
+      runId: runId || entry.agui?.activeRunId || entry.localRunId || null,
+      trackingRunId: entry.trackingRun?.runId || null,
+      changedFiles,
+      text: lastAssistantText(entry.session) || "",
+    });
+    if (appended) {
+      broadcastGlobal({ type: "trace.updated", entry: appended }, entry.ctx.id);
+    }
+    return appended;
+  } catch (error) {
+    logger.warn?.(`[trace] run settle failed for ${entry.ctx.id}/${entry.id}: ${error.message}`);
+    return null;
+  }
+}
+
+
 async function runPlan(ctx, planId) {
   const store = ctx.store;
   const row = store.getPlanRow(planId);
@@ -316,6 +338,7 @@ async function runPlan(ctx, planId) {
     projectManager,
     live,
     onMaterialSaved: maybeMaterialSaved,
+    onRunSettled: maybeRunSettled,
   });
 
   tracking = createTrackingService({
@@ -435,6 +458,9 @@ async function handleApi(req, res, url) {
   }
   if (pathname.startsWith("/api/approvals")) {
     return handleApprovals({ req, res, url, app, ctx });
+  }
+  if (pathname === "/api/trace" || pathname.startsWith("/api/trace/")) {
+    return handleTrace({ req, res, url, app, ctx });
   }
   if (pathname.startsWith("/api/ag-ui/")) {
     return handleAgUi({ req, res, url, app, ctx });

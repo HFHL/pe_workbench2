@@ -23,6 +23,7 @@ import { handleApprovals } from "../server/routes/approvals.mjs";
 import { handleSessions } from "../server/routes/sessions.mjs";
 import { handleMaterials } from "../server/routes/materials.mjs";
 import { handleTracking } from "../server/routes/tracking.mjs";
+import { handleTrace } from "../server/routes/trace.mjs";
 import { handlePlans } from "../server/routes/plans.mjs";
 import { handleAgUi } from "../server/routes/ag-ui.mjs";
 
@@ -61,7 +62,7 @@ await run("create-app exports a factory instead of listening on import", () => {
 await run("route modules export handlers", () => {
   for (const handler of [
     handleProjects, handleApprovals, handleSessions, handleMaterials,
-    handleTracking, handlePlans, handleAgUi,
+    handleTracking, handleTrace, handlePlans, handleAgUi,
   ]) {
     assert.equal(typeof handler, "function");
   }

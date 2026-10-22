@@ -6,15 +6,19 @@
  * same card even when Pi's JSONL never stored `details`.
  */
 
+import path from "node:path";
+
 import { newRunId } from "../../lib/agent-protocol/ids.mjs";
 import { extractPresentation } from "../../lib/contracts/index.mjs";
 import { resultText, toolDetail } from "./snapshot.mjs";
 
-export function attachSessionEvents(entry, { bus, onMaterialSaved = () => {} }) {
+export function attachSessionEvents(entry, { bus, onMaterialSaved = () => {}, onRunSettled = () => {} }) {
   entry.unsubscribe = entry.session.subscribe((event) => {
     switch (event.type) {
       case "agent_start":
         entry.localRunId = newRunId();
+        entry.traceChangedFiles = [];
+        entry.traceRunStartedAt = new Date().toISOString();
         bus.broadcast(entry, { type: "run.started" });
         break;
       case "message_update":
@@ -96,12 +100,30 @@ export function attachSessionEvents(entry, { bus, onMaterialSaved = () => {} }) 
           ...(presentationError ? { presentationError } : {}),
         });
         onMaterialSaved(entry, event.toolName, args);
+        if (["write", "edit"].includes(event.toolName) && typeof args.path === "string") {
+          const root = path.resolve(entry.ctx.root);
+          const absolute = path.resolve(root, args.path);
+          if (absolute.startsWith(root + path.sep)) {
+            const rel = path.relative(root, absolute).split(path.sep).join("/");
+            if (
+              rel
+              && !rel.startsWith(".tracking/")
+              && !rel.includes("/backups/")
+              && Array.isArray(entry.traceChangedFiles)
+              && !entry.traceChangedFiles.includes(rel)
+            ) {
+              entry.traceChangedFiles.push(rel);
+            }
+          }
+        }
         break;
       }
       case "agent_settled": {
         entry.updatedAt = new Date().toISOString();
         const title = entry.session.sessionName || entry.title;
         entry.title = title;
+        const changedFiles = Array.isArray(entry.traceChangedFiles) ? [...entry.traceChangedFiles] : [];
+        entry.traceChangedFiles = [];
         bus.broadcast(entry, { type: "run.settled", aborted: event.aborted });
         bus.broadcast(entry, {
           type: "session.updated",
@@ -110,6 +132,12 @@ export function attachSessionEvents(entry, { bus, onMaterialSaved = () => {} }) 
           messageCount: entry.session.messages.length,
           updatedAt: entry.updatedAt,
         });
+        void Promise.resolve(onRunSettled(entry, {
+          changedFiles,
+          aborted: event.aborted,
+          startedAt: entry.traceRunStartedAt || null,
+          runId: entry.agui?.activeRunId || entry.localRunId || null,
+        })).catch(() => {});
         break;
       }
     }

@@ -23,6 +23,7 @@ import { AgentEventLog } from "../lib/agent-protocol/event-log.mjs";
 import { applyModelChanges } from "../lib/model-writer.mjs";
 import { createApprovalService } from "../lib/approvals/service.mjs";
 import { createDashboardService } from "./dashboard/service.mjs";
+import { createTraceService } from "../lib/trace/service.mjs";
 
 export async function ensureProjectDirs(root) {
   const dirs = ["exports", "inputs", "uploads", ".tracking", ".pi/sessions", ".agents/skills"];
@@ -152,6 +153,12 @@ export function createProjectManager({
       asr,
       tools: [workbookTool, pdfTool, westockTool, anySearchTool, webFetchTool, asrTool, trackingTool].filter(Boolean),
     };
+    ctx.trace = createTraceService({
+      store,
+      projectId: row.id,
+      projectName: row.name,
+      root: projectRoot,
+    });
     ctx.approvals = createApprovalService({
       store,
       applyModelChanges,

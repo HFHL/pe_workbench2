@@ -30,6 +30,7 @@ export function createSessionService({
   projectManager,
   live,
   onMaterialSaved = () => {},
+  onRunSettled = () => {},
 }) {
   if (!config || !bus || !projectManager || !live) {
     throw new Error("createSessionService requires config, bus, projectManager and live");
@@ -134,7 +135,7 @@ export function createSessionService({
       localRunId: null,
     };
     entry.snapshot = () => serializeSession(entry);
-    attachSessionEvents(entry, { bus, onMaterialSaved });
+    attachSessionEvents(entry, { bus, onMaterialSaved, onRunSettled });
     entry.agui = new PiAgUiAdapter({
       session,
       threadId: entry.id,

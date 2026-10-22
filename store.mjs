@@ -380,6 +380,66 @@ export class Store {
         created_at text not null
       );
 
+      -- One judgment card per project. The payload is a versioned JSON document
+      -- (card + stages + claims + evidence + reviews + notes). It is deliberately
+      -- a single row: the card is the fact source, and the UI reads one view.
+      create table if not exists judgment_cards (
+        workspace_id text primary key,
+        payload_json text not null,
+        updated_at text not null
+      );
+
+      create table if not exists card_events (
+        id text primary key,
+        workspace_id text not null,
+        card_id text,
+        type text not null,
+        payload_json text,
+        created_at text not null
+      );
+
+      create index if not exists idx_card_events_workspace
+        on card_events (workspace_id, created_at desc);
+
+      -- Model trace: the append-only, ordered history of one valuation model.
+      -- "at" is the semantic time of the change (not the row-insert time).
+      create table if not exists trace_entries (
+        id text primary key,
+        workspace_id text not null,
+        seq integer not null,
+        at text not null,
+        kind text not null,
+        title text not null,
+        summary text not null default '',
+        reason text not null default '',
+        files_json text not null default '[]',
+        changes_json text not null default '[]',
+        source_json text not null default '{}',
+        created_at text not null,
+        unique (workspace_id, seq)
+      );
+
+      create index if not exists idx_trace_entries_workspace
+        on trace_entries (workspace_id, seq);
+
+      -- Human judgment attached to one trace entry. A high/low verdict needs a
+      -- second confirmation before an adjustment is requested.
+      create table if not exists trace_judgments (
+        id text primary key,
+        workspace_id text not null,
+        entry_id text not null,
+        verdict text not null,
+        note text not null default '',
+        status text not null,
+        prompt text,
+        adjustment_entry_id text,
+        created_at text not null,
+        updated_at text not null
+      );
+
+      create index if not exists idx_trace_judgments_workspace
+        on trace_judgments (workspace_id, created_at desc);
+
       create table if not exists document_parses (
         blob_sha256 text primary key,
         file_name text not null,
@@ -1078,6 +1138,31 @@ export class Store {
     );
 
     return this.getMaterial(row.id);
+  }
+
+  findMaterialByName(name, { includeDeleted = false } = {}) {
+    const filter = includeDeleted ? "" : "and deleted_at is null";
+    return this.db.prepare(
+      `select * from materials where workspace_id = ? and name = ? ${filter} order by updated_at desc limit 1`,
+    ).get(this.projectId, name) || null;
+  }
+
+  getLatestMaterialVersion(materialId) {
+    return this.db.prepare(
+      `select * from material_versions where material_id = ? order by v desc limit 1`,
+    ).get(materialId) || null;
+  }
+
+  readMaterialVersionText(materialId, v) {
+    const row = this.db.prepare(
+      `select blob_sha256 from material_versions where material_id = ? and v = ?`,
+    ).get(materialId, v);
+    if (!row) return null;
+    try {
+      return fs.readFileSync(this.blobPath(row.blob_sha256), "utf8");
+    } catch {
+      return null;
+    }
   }
 
   getMaterial(id) {
@@ -2025,6 +2110,207 @@ export class Store {
     }
     const row = this.db.prepare(`select * from notifications where id = ?`).get(id);
     return row ? this.notificationDto(row) : null;
+  }
+
+  getJudgmentCard(workspaceId = this.projectId) {
+    const row = this.db.prepare(
+      `select payload_json, updated_at from judgment_cards where workspace_id = ?`,
+    ).get(workspaceId);
+    if (!row) return null;
+    let payload = null;
+    try {
+      payload = JSON.parse(row.payload_json);
+    } catch {
+      payload = null;
+    }
+    return payload ? { ...payload, _updatedAt: row.updated_at } : null;
+  }
+
+  saveJudgmentCard(payload, workspaceId = this.projectId) {
+    const now = nowIso();
+    this.db.prepare(
+      `insert into judgment_cards (workspace_id, payload_json, updated_at)
+       values (?, ?, ?)
+       on conflict(workspace_id) do update set payload_json = excluded.payload_json, updated_at = excluded.updated_at`,
+    ).run(workspaceId, JSON.stringify(payload), now);
+    return { ...payload, _updatedAt: now };
+  }
+
+  deleteJudgmentCard(workspaceId = this.projectId) {
+    return this.db.prepare(`delete from judgment_cards where workspace_id = ?`).run(workspaceId).changes;
+  }
+
+  appendCardEvent({ workspaceId = this.projectId, cardId = null, type, payload = {} } = {}) {
+    const id = uuid();
+    const at = nowIso();
+    this.db.prepare(
+      `insert into card_events (id, workspace_id, card_id, type, payload_json, created_at)
+       values (?, ?, ?, ?, ?, ?)`,
+    ).run(id, workspaceId, cardId, type, JSON.stringify(payload), at);
+    return { id, workspaceId, cardId, type, payload, createdAt: at };
+  }
+
+  listCardEvents(workspaceId = this.projectId, { limit = 50 } = {}) {
+    const rows = this.db.prepare(
+      `select * from card_events where workspace_id = ? order by created_at desc, rowid desc limit ?`,
+    ).all(workspaceId, limit);
+    return rows.map((row) => {
+      let payload = null;
+      try {
+        payload = JSON.parse(row.payload_json || "null");
+      } catch {
+        payload = null;
+      }
+      return {
+        id: row.id,
+        workspaceId: row.workspace_id,
+        cardId: row.card_id,
+        type: row.type,
+        payload,
+        createdAt: row.created_at,
+      };
+    });
+  }
+
+  /* ---------- model trace ---------- */
+
+  traceEntryDto(row) {
+    const parse = (value, fallback) => {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return fallback;
+      }
+    };
+    return {
+      id: row.id,
+      workspaceId: row.workspace_id,
+      seq: row.seq,
+      at: row.at,
+      kind: row.kind,
+      title: row.title,
+      summary: row.summary,
+      reason: row.reason,
+      files: parse(row.files_json, []),
+      changes: parse(row.changes_json, []),
+      source: parse(row.source_json, {}),
+      createdAt: row.created_at,
+    };
+  }
+
+  listTraceEntries(workspaceId = this.projectId) {
+    return this.db.prepare(
+      `select * from trace_entries where workspace_id = ? order by seq asc`,
+    ).all(workspaceId).map((row) => this.traceEntryDto(row));
+  }
+
+  getTraceEntry(id, workspaceId = this.projectId) {
+    const row = this.db.prepare(
+      `select * from trace_entries where id = ? and workspace_id = ?`,
+    ).get(id, workspaceId);
+    return row ? this.traceEntryDto(row) : null;
+  }
+
+  appendTraceEntry({
+    workspaceId = this.projectId,
+    at = nowIso(),
+    kind = "updated",
+    title = "",
+    summary = "",
+    reason = "",
+    files = [],
+    changes = [],
+    source = {},
+  } = {}) {
+    const id = uuid();
+    const created = nowIso();
+    const row = this.db.prepare(
+      `select coalesce(max(seq), 0) as n from trace_entries where workspace_id = ?`,
+    ).get(workspaceId);
+    const seq = Number(row?.n || 0) + 1;
+    this.db.prepare(
+      `insert into trace_entries (
+        id, workspace_id, seq, at, kind, title, summary, reason,
+        files_json, changes_json, source_json, created_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id, workspaceId, seq, String(at), String(kind), String(title),
+      String(summary || ""), String(reason || ""),
+      JSON.stringify(files || []), JSON.stringify(changes || []),
+      JSON.stringify(source || {}), created,
+    );
+    return this.getTraceEntry(id, workspaceId);
+  }
+
+  traceJudgmentDto(row) {
+    return {
+      id: row.id,
+      workspaceId: row.workspace_id,
+      entryId: row.entry_id,
+      verdict: row.verdict,
+      note: row.note,
+      status: row.status,
+      prompt: row.prompt || "",
+      adjustmentEntryId: row.adjustment_entry_id || null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  listTraceJudgments(workspaceId = this.projectId) {
+    return this.db.prepare(
+      `select * from trace_judgments where workspace_id = ? order by created_at desc, rowid desc`,
+    ).all(workspaceId).map((row) => this.traceJudgmentDto(row));
+  }
+
+  getTraceJudgment(id, workspaceId = this.projectId) {
+    const row = this.db.prepare(
+      `select * from trace_judgments where id = ? and workspace_id = ?`,
+    ).get(id, workspaceId);
+    return row ? this.traceJudgmentDto(row) : null;
+  }
+
+  appendTraceJudgment({
+    workspaceId = this.projectId,
+    entryId,
+    verdict,
+    note = "",
+    status = "recorded",
+  } = {}) {
+    const id = uuid();
+    const now = nowIso();
+    this.db.prepare(
+      `insert into trace_judgments (
+        id, workspace_id, entry_id, verdict, note, status, prompt,
+        adjustment_entry_id, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, null, null, ?, ?)`,
+    ).run(id, workspaceId, String(entryId), String(verdict), String(note || ""), String(status), now, now);
+    return this.getTraceJudgment(id, workspaceId);
+  }
+
+  updateTraceJudgment(id, patch = {}, workspaceId = this.projectId) {
+    const sets = [];
+    const values = [];
+    if (patch.status !== undefined) { sets.push("status = ?"); values.push(String(patch.status)); }
+    if (patch.note !== undefined) { sets.push("note = ?"); values.push(String(patch.note)); }
+    if (patch.prompt !== undefined) { sets.push("prompt = ?"); values.push(patch.prompt == null ? null : String(patch.prompt)); }
+    if (patch.adjustmentEntryId !== undefined) {
+      sets.push("adjustment_entry_id = ?");
+      values.push(patch.adjustmentEntryId == null ? null : String(patch.adjustmentEntryId));
+    }
+    sets.push("updated_at = ?");
+    values.push(nowIso());
+    values.push(id, workspaceId);
+    this.db.prepare(
+      `update trace_judgments set ${sets.join(", ")} where id = ? and workspace_id = ?`,
+    ).run(...values);
+    return this.getTraceJudgment(id, workspaceId);
+  }
+
+  resetTrace(workspaceId = this.projectId) {
+    this.db.prepare(`delete from trace_judgments where workspace_id = ?`).run(workspaceId);
+    this.db.prepare(`delete from trace_entries where workspace_id = ?`).run(workspaceId);
+    return true;
   }
 
   seedTrackings() {

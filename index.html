@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="tracking.css">
 <link rel="stylesheet" href="suggestions.css">
 <link rel="stylesheet" href="dashboard.css">
+<link rel="stylesheet" href="ui/trace/trace.css">
 </head>
 <body>
 <div class="desk">
@@ -86,6 +87,7 @@
         </header>
 
         <div class="thread" id="thread"></div>
+        <div id="traceHitl" class="trace-hitl-slot" hidden></div>
 
         <div class="composer-wrap" id="dropZone">
           <div class="next-actions" id="nextActions" hidden></div>
@@ -107,7 +109,7 @@
         </div>
       </main>
 
-      <aside class="files" id="filesPanel" aria-label="资料与计划">
+      <aside class="files" id="filesPanel" aria-label="资料与追踪">
         <header class="rp-head">
           <div class="rp-title"><span id="panelTitle">资料</span><span class="rp-count" id="fileCount">0</span></div>
           <div class="rp-head-actions">
@@ -119,8 +121,8 @@
           <button class="filter is-active" data-filter="all" role="tab" aria-selected="true">全部</button>
           <button class="filter" data-filter="input" role="tab" aria-selected="false">输入</button>
           <button class="filter" data-filter="output" role="tab" aria-selected="false">产出</button>
-          <button class="filter" data-filter="tracking" role="tab" aria-selected="false">跟踪</button>
-          <button class="filter" data-filter="tasks" role="tab" aria-selected="false">计划</button>
+          <button class="filter" data-filter="trace" role="tab" aria-selected="false">追踪</button>
+          <button class="filter" data-filter="tracking" role="tab" aria-selected="false">自动更新</button>
         </div>
         <div class="rp-hint" id="fileHint" hidden>
           <span class="hint-icon" aria-hidden="true"><svg class="i" width="13" height="13"><use href="#i-check-square"/></svg></span>

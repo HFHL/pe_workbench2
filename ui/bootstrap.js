@@ -19,6 +19,8 @@ import {
 } from './previews/previews.js';
 import { runtime } from './runtime.js';
 import './dashboard/panel.js';
+import { initTrace, resetTraceView, loadTrace } from './trace/panel.js';
+import { initTraceHitl } from './trace/hitl.js';
 import { closeStreams, openAgentStream, openGlobalStream } from './events/streams.js';
 import {
   renderThread, scheduleThread, syncLiveTicker, resetLive, clearCaches,
@@ -153,7 +155,8 @@ function decorateSession(item) {
 async function loadProjects() {
   const items = await api('/api/projects');
   state.projects = Array.isArray(items) ? items : [];
-  const stored = localStorage.getItem('workbench.project');
+  const requested = new URLSearchParams(location.search).get('project');
+  const stored = requested || localStorage.getItem('workbench.project');
   let id = state.project.id;
   if (stored && state.projects.some(p => p.id === stored)) id = stored;
   if (!state.projects.some(p => p.id === id)) id = state.projects[0]?.id || id;
@@ -249,6 +252,8 @@ async function switchProject(id) {
     await loadSessions();
     await loadFoundation();
     await window.Tracking?.reload?.();
+    resetTraceView();
+    void loadTrace();
     renderPanel();
   } catch (error) {
     toast(error.message || '加载项目失败');
@@ -264,6 +269,7 @@ function handleGlobalEvent(payload) {
     renderPanel();
   }
   if (payload.type === 'plan.updated') upsertPlan(payload.plan);
+  if (payload.type === 'trace.updated') void loadTrace();
   if (payload.type === 'tracking.updated') window.Tracking?.upsert?.(payload.tracking);
   if (payload.type === 'tracking.deleted') window.Tracking?.remove?.(payload.id);
   if (payload.type === 'notification.created') {
@@ -329,6 +335,8 @@ async function boot() {
     toast(error.message || '加载会话失败');
   }
   await loadFoundation();
+  await initTrace();
+  initTraceHitl();
 }
 
 async function loadSessions() {

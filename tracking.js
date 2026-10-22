@@ -308,8 +308,8 @@
     const btn = document.querySelector('#fileFilters [data-filter="tracking"]');
     if (!btn) return;
     btn.innerHTML = ui.trackings.length
-      ? `跟踪<span class="filter-count">${ui.trackings.length}</span>`
-      : '跟踪';
+      ? `自动更新<span class="filter-count">${ui.trackings.length}</span>`
+      : '自动更新';
   }
 
   function renderPanel() {

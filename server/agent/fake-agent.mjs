@@ -279,6 +279,24 @@ class FakeSession {
           details: { text: `已写入 ${rel}` },
         });
         await this.textMessage("报告已更新，右栏应该出现新的卡片。", { delay: 10 });
+      } else if (scenario === "trace-proposal") {
+        await this.textMessage("我把调整方案写出来。", { delay: 8 });
+        const rel = "exports/估值模型调整提案.md";
+        fs.mkdirSync(path.join(this.ctx.root, path.dirname(rel)), { recursive: true });
+        fs.writeFileSync(
+          path.join(this.ctx.root, rel),
+          "# 估值模型调整提案\n\n目标价区间从 88–100 元下移到 60–85 元，引入归母系数 Mi=65%。\n",
+          "utf8",
+        );
+        await this.toolCall({
+          name: "write",
+          args: { path: rel },
+          details: { text: `已写入 ${rel}` },
+        });
+        await this.textMessage(
+          "目标价区间从 88–100 元整体下移到 60–85 元。引入归母系数 Mi。报告和模型待人工采纳后写入。",
+          { delay: 10 },
+        );
       } else if (scenario === "tool-error") {
         await this.textMessage("我先读一下模型。", { delay: 8 });
         await this.toolCall({

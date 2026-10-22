@@ -28,11 +28,17 @@ function visibleFiles() {
 function renderPanel() {
   const tasks = state.filter === 'tasks';
   const tracking = state.filter === 'tracking';
-  $('#panelTitle').textContent = tracking ? '跟踪' : tasks ? '计划' : '资料';
+  const trace = state.filter === 'trace';
+  $('#panelTitle').textContent = trace ? '追踪' : tracking ? '自动更新' : tasks ? '计划' : '资料';
   const newTrack = $('#newTrackBtn');
   if (newTrack) newTrack.hidden = !tracking;
-  $('#fileHint').hidden = tracking || tasks || state.files.length === 0;
-  if (tracking || tasks) $('#filePickbar').hidden = true;
+  $('#fileHint').hidden = trace || tracking || tasks || state.files.length === 0;
+  if (trace || tracking || tasks) $('#filePickbar').hidden = true;
+  if (trace) {
+    $('#fileCount').textContent = String(window.Trace?.count?.() ?? '');
+    window.Trace?.renderPanel?.();
+    return;
+  }
   if (tracking) {
     $('#fileCount').textContent = String(window.Tracking?.count?.() ?? 0);
     window.Tracking?.renderPanel?.();
@@ -65,7 +71,7 @@ function renderFiles(visible) {
 }
 
 function refreshFileCards() {
-  if (state.filter === 'tasks' || state.filter === 'tracking') return;
+  if (state.filter === 'tasks' || state.filter === 'tracking' || state.filter === 'trace') return;
   const top = fileListEl.scrollTop;
   renderFiles(visibleFiles());
   fileListEl.scrollTop = top;
@@ -114,7 +120,7 @@ function fileCard(f) {
 function syncPickbar(visible = visibleFiles()) {
   const valid = [...state.picked].filter(id => fileById(id));
   if (valid.length !== state.picked.size) state.picked = new Set(valid);
-  const filesView = state.filter !== 'tasks' && state.filter !== 'tracking';
+  const filesView = state.filter !== 'tasks' && state.filter !== 'tracking' && state.filter !== 'trace';
   const count = state.picked.size;
   const bar = $('#filePickbar');
   if (bar) bar.hidden = !filesView || count === 0;
