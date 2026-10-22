@@ -568,6 +568,16 @@ export class Store {
     ).run(workspaceId, threadId, runId).changes;
   }
 
+  hasAgentTerminal({ workspaceId, threadId, runId }) {
+    if (!workspaceId || !threadId || !runId) return false;
+    return Boolean(this.db.prepare(
+      `select 1 from agent_events
+       where workspace_id = ? and thread_id = ? and run_id = ?
+         and event_type in ('RUN_FINISHED', 'RUN_ERROR')
+       limit 1`,
+    ).get(workspaceId, threadId, runId));
+  }
+
   /**
    * Read transport events for replay. With `runId` the cursor is the run-local
    * `sequence`; without it the cursor is the thread-wide `ordinal`.
