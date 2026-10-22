@@ -801,6 +801,43 @@ async function testAdapter() {
     check("discarded prefix cannot be located", memory.locate(seen[0]?.eventId) === null);
   }
 
+  // 8e. failure while persisting TOOL_CALL_END must still balance the live call
+  {
+    const memory = new MemoryAgentEventLog({ workspaceId: "p1" });
+    const brokenLog = {
+      append(args) {
+        if (args.eventType === EventType.TOOL_CALL_END) throw new Error("disk full");
+        return memory.append(args);
+      },
+      locate: (eventId) => memory.locate(eventId),
+      list: (options) => memory.list(options),
+      hasTerminal: (options) => memory.hasTerminal(options),
+      discardRun: (options) => memory.discardRun(options),
+    };
+    const session = new FakePiSession({
+      script: async ({ emit }) => {
+        emit({ type: "agent_start" });
+        emit({ type: "tool_execution_start", toolCallId: "tc-disk", toolName: "read", args: {} });
+        emit({ type: "tool_execution_end", toolCallId: "tc-disk", result: "ok", isError: false });
+        emit({ type: "agent_settled", aborted: false });
+      },
+    });
+    const adapter = new PiAgUiAdapter({ session, threadId: "t-tool-disk", workspaceId: "p1", log: brokenLog });
+    const seen = [];
+    adapter.subscribeEvents((record) => seen.push(record));
+    await adapter.runPrompt("hi");
+    await session.lastRun;
+    await waitFor(() => !adapter.isRunning, { label: "tool end persistence failure" });
+    check(
+      "TOOL_CALL_END persistence failure still emits a result before RUN_ERROR",
+      typesOf(seen).join(",") ===
+        "RUN_STARTED,TOOL_CALL_START,TOOL_CALL_ARGS,TOOL_CALL_END,TOOL_CALL_RESULT,RUN_ERROR",
+      typesOf(seen).join(","),
+    );
+    check("failed tool result is live-only", seen.at(-2)?.persisted === false);
+    check("failed tool run leaves no replay prefix", memory.records.length === 0, String(memory.records.length));
+  }
+
   // 9. one run at a time per thread
   {
     const log = new MemoryAgentEventLog({ workspaceId: "p1" });
@@ -981,6 +1018,45 @@ async function testReplay() {
       isRunActive: () => false,
     });
     check("afterSequence replays the tail", res.events.map((event) => event.data.type).join(",") === "TEXT_MESSAGE_CONTENT,RUN_FINISHED");
+  }
+
+  // An unknown/deleted cursor must not silently restart replay at ordinal zero.
+  {
+    const log = buildLog();
+    const res = new FakeResponse();
+    await streamAgUiEvents({
+      req: new FakeRequest(),
+      res,
+      log,
+      threadId: "t-replay",
+      runId: null,
+      afterEventId: "evt_deleted_000001",
+      subscribe: () => () => {},
+      isRunActive: () => false,
+    });
+    check("stale Last-Event-ID does not duplicate thread history", res.events.length === 0, String(res.events.length));
+  }
+
+  // Even if cleanup itself fails, an inactive prefix without a terminal is quarantined.
+  {
+    const log = new MemoryAgentEventLog({ workspaceId: "p1" });
+    log.append({
+      threadId: "t-incomplete",
+      runId: "r-incomplete",
+      eventType: EventType.RUN_STARTED,
+      event: { type: EventType.RUN_STARTED, threadId: "t-incomplete", runId: "r-incomplete" },
+    });
+    const res = new FakeResponse();
+    await streamAgUiEvents({
+      req: new FakeRequest(),
+      res,
+      log,
+      threadId: "t-incomplete",
+      runId: "r-incomplete",
+      subscribe: () => () => {},
+      isRunActive: () => false,
+    });
+    check("inactive incomplete runs are not replayed", res.events.length === 0, String(res.events.length));
   }
 
   // Replay paginates instead of truncating at one batch.
