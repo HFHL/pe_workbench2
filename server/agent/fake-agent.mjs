@@ -216,6 +216,26 @@ class FakeSession {
           },
         });
         await this.textMessage("查询完成：2024 年营收是 100。", { delay: 12 });
+      } else if (scenario === "multi-tool") {
+        await this.textMessage("我先查两个地方。", { delay: 8 });
+        await this.toolCall({
+          name: "workbook_query",
+          args: { path: "uploads/model.xlsx", query: "Revenue" },
+          details: {
+            text: "候选 6 个单元格。",
+            presentation: {
+              schema: { name: "pe.workbook-query.result", version: 1 },
+              payload: fakePresentation(6),
+            },
+          },
+        });
+        await this.textMessage("再看一下资料。", { delay: 8 });
+        await this.toolCall({
+          name: "grep",
+          args: { pattern: "收入" },
+          details: { text: "命中 2 处" },
+        });
+        await this.textMessage("两处都看完了。", { delay: 8 });
       } else if (scenario === "bad-presentation") {
         await this.textMessage("这个工具结果有问题。", { delay: 8 });
         await this.toolCall({
@@ -264,7 +284,9 @@ class FakeSession {
         await this.toolCall({
           name: "workbook_query",
           args: { path: "uploads/missing.xlsx", query: "Revenue" },
-          details: { text: "workbook_query 失败：文件不存在" },
+          // Deliberately contains no "failed"/"失败" keyword: the protocol
+          // adapter must carry the error semantic through standard content.
+          details: { text: "No such workbook: uploads/missing.xlsx" },
           isError: true,
         });
         await this.textMessage("工具失败了，文件可能不在项目里。", { delay: 8 });
@@ -283,6 +305,24 @@ class FakeSession {
           message.content[0].text += delta;
           this.emit({ type: "message_update", message, assistantMessageEvent: { type: "text_delta", delta } });
           await sleep(80);
+        }
+        this.messages.push(message);
+        this.emit({ type: "message_end", message });
+      } else if (scenario === "reconnect-long") {
+        const message = {
+          id: this.nextId("msg"),
+          role: "assistant",
+          content: [{ type: "text", text: "" }],
+          timestamp: Date.now(),
+          stopReason: "stop",
+        };
+        this.emit({ type: "message_start", message });
+        for (let index = 0; index < 25; index += 1) {
+          if (this.aborted) break;
+          const delta = `重连片段${index} `;
+          message.content[0].text += delta;
+          this.emit({ type: "message_update", message, assistantMessageEvent: { type: "text_delta", delta } });
+          await sleep(90);
         }
         this.messages.push(message);
         this.emit({ type: "message_end", message });

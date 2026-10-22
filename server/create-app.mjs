@@ -49,6 +49,7 @@ import { prepareWorkingModel } from "../lib/model-writer.mjs";
 import { handleProjects } from "./routes/projects.mjs";
 import { handleApprovals } from "./routes/approvals.mjs";
 import { handleAgUi } from "./routes/ag-ui.mjs";
+import { handleCopilotKit } from "./routes/copilotkit.mjs";
 import { handleSessions } from "./routes/sessions.mjs";
 import { handleMaterials } from "./routes/materials.mjs";
 import { handleTracking } from "./routes/tracking.mjs";
@@ -72,6 +73,7 @@ export async function createWorkbench({ config: providedConfig = null, logger = 
   const WEB_FETCH_ALLOW_PRIVATE = config.webFetchAllowPrivate;
   const SEED_DEMO = config.seedDemo;
   const CALC_INFO = config.calcInfo;
+  const COPILOTKIT_ENABLED = config.copilotkitEnabled === true;
   const ROOT = config.root;
   const PROJECTS_DIR = config.projectsDir;
   const bus = createEventBus();
@@ -437,6 +439,9 @@ async function handleApi(req, res, url) {
   if (pathname.startsWith("/api/ag-ui/")) {
     return handleAgUi({ req, res, url, app, ctx });
   }
+  if (pathname.startsWith("/api/copilotkit")) {
+    return handleCopilotKit({ req, res, url, app, ctx });
+  }
   if (
     pathname === "/api/sessions"
     || pathname.startsWith("/api/sessions/")
@@ -543,6 +548,7 @@ async function handleApi(req, res, url) {
     WEB_FETCH,
     WEB_FETCH_ALLOW_PRIVATE,
     CALC_INFO,
+    COPILOTKIT_ENABLED,
     WORKBOOK_QUERY,
     PDF_READ,
     ensureProjectDirs,

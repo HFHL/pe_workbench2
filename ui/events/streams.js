@@ -55,6 +55,10 @@ export function openGlobalStream(onEvent, { onError = () => {} } = {}) {
 
 export function openAgentStream(sessionId, onEvent, { onError = () => {} } = {}) {
   closeAgentStream();
+  // One session must never run both transports. The pilot owns the run when
+  // selected; fail closed if its bundle is unavailable rather than silently
+  // falling back to the legacy SSE stream.
+  if (getState().agentTransport !== "legacy") return null;
   const projectId = getState().project?.id;
   const stream = new EventSource(withProject(`/api/sessions/${encodeURIComponent(sessionId)}/events`));
   agentStream = stream;

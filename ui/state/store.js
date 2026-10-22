@@ -10,6 +10,7 @@ const target = {
   projects: [],
   project: { id: "product-eng", name: "Product Eng", note: "个人项目", accent: "slate" },
   activeSession: null,
+  agentTransport: "legacy",
   filter: "all",
   pending: [],
   picked: new Set(),

@@ -24,6 +24,14 @@ async function send() {
   const text = inputEl.value.trim();
   const attached = state.pending.slice();
   if (!text && !attached.length) return;
+  if (state.agentTransport === 'copilotkit' && !runtime.pilot) {
+    toast('CopilotKit 试点未就绪，请检查构建或关闭试点参数');
+    return;
+  }
+  if (state.agentTransport === 'copilotkit' && state.streaming) {
+    toast('当前回复尚未结束');
+    return;
+  }
 
   // 文件先留在输入框里，点发送时才真正上传。
   if (attached.some(item => item.staged)) {
@@ -52,13 +60,35 @@ async function send() {
   syncComposer();
   renderAttachments();
   refreshFileCards();
+  window.NextActions?.refresh?.();
+  renderThread(true);
+
+  // Transport is chosen per page. Only one client may send prompts and own
+  // run state for this session.
+  if (state.agentTransport !== 'legacy') {
+    if (state.agentTransport !== 'copilotkit' || !runtime.pilot) {
+      state.streaming = false;
+      syncStop();
+      renderThread(true);
+      toast('CopilotKit 试点未就绪，请检查构建或关闭试点参数');
+      return;
+    }
+    try {
+      await runtime.pilot.send({ text: text || '看一下这几个文件。', attachments: paths });
+    } catch (error) {
+      state.streaming = false;
+      syncStop();
+      renderThread(true);
+      toast(error.message || '发送失败');
+    }
+    return;
+  }
+
   state.streaming = true;
   state.live = { text: '', tools: [], startedAt: Date.now() };
   runtime.resetLive?.();
   syncStop();
-  window.NextActions?.refresh?.();
   renderThread(true);
-
   try {
     await api(`/api/sessions/${sessionId}/messages`, {
       method: 'POST',
@@ -220,7 +250,10 @@ function syncReferenceButton() {
 
 function syncComposer() {
   const hasText = inputEl.value.trim().length > 0;
-  sendBtn.disabled = state.uploading || (!hasText && state.pending.length === 0);
+  const pilotBusy = state.agentTransport === 'copilotkit' && state.streaming;
+  const pilotUnavailable = state.agentTransport === 'unavailable';
+  sendBtn.disabled = state.uploading || pilotBusy || pilotUnavailable
+    || (!hasText && state.pending.length === 0);
 }
 
 /* ---------- inputs: upload ---------- */
