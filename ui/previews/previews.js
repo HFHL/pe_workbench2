@@ -26,6 +26,8 @@ const renderThread = (...args) => runtime.renderThread?.(...args);
 const scheduleThread = (...args) => runtime.scheduleThread?.(...args);
 const upsertMaterial = (material) => runtime.upsertMaterial?.(material);
 
+let lastFocus = null;
+
 const previewState = {
   token: 0,
   key: null,
@@ -950,6 +952,12 @@ async function mountExcel(f, v, token) {
   };
   box.innerHTML = excelShell(manifest, f, v);
   await loadXlsxSheet(active, token);
+  const requested = previewState.requestedLocator;
+  previewState.requestedLocator = null;
+  if (requested && token === previewState.token) {
+    // Source links from the investment dashboard point at Sheet!A1.
+    gotoXlsxCell(requested);
+  }
 }
 
 function excelShell(manifest, f, v) {
@@ -1918,13 +1926,14 @@ function onPreviewWheel(event) {
 
 
 
-function openFile(id, version) {
+function openFile(id, version, locator = null) {
   const f = fileById(id);
   if (!f) return;
   const hadFocus = lastFocus;
   if (!taskOverlay.hidden) closeTask(false);
   state.openFileId = id;
   state.selectedVersion = version ?? latest(f).v;
+  previewState.requestedLocator = locator ? String(locator) : null;
   lastFocus = hadFocus || document.activeElement;
   renderFileDialog();
   overlay.hidden = false;

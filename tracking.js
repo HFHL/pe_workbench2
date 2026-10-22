@@ -700,6 +700,7 @@
             <p class="track-sub">${ic('clock', 12)}${esc(t.scheduleLabel)} · ${t.enabled ? `下次 ${esc(t.nextRunLabel || '—')}` : '已暂停'}${t.targetVersion || f ? ` · 目标 v${t.targetVersion ?? fileVersion(f)}` : ''}</p>
           </div>
           <div class="track-head-actions">
+            <button class="btn dash-entry" data-track-dashboard>${ic('grid', 14)}<span>Dashboard</span></button>
             ${f ? `<button class="icon-btn" data-track-open-file aria-label="打开目标文件" title="打开目标文件">${ic('external', 16)}</button>` : ''}
             <button class="icon-btn" data-track-close aria-label="关闭">${ic('x', 16)}</button>
           </div>
@@ -1420,6 +1421,11 @@
     detailOverlay.addEventListener('click', e => {
       if (e.target === detailOverlay) { closeDetail(); return; }
       if (e.target.closest('[data-track-close]')) { closeDetail(); return; }
+      if (e.target.closest('[data-track-dashboard]')) {
+        if (window.TrackingDashboard?.open) window.TrackingDashboard.open(ui.openId);
+        else toast('Dashboard 没有就绪');
+        return;
+      }
       if (e.target.closest('[data-track-open-file]')) { openTargetFile(); return; }
       if (e.target.closest('[data-track-toggle]')) { toggleTracking(); return; }
       if (e.target.closest('[data-track-schedule]')) { openSchedule(); return; }

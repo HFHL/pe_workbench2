@@ -18,12 +18,13 @@ import {
   onPreviewPointerDown, onPreviewDoubleClick, onPreviewKeyDown, onPreviewWheel,
 } from './previews/previews.js';
 import { runtime } from './runtime.js';
+import './dashboard/panel.js';
 import { closeStreams, openAgentStream, openGlobalStream } from './events/streams.js';
 import {
   renderThread, scheduleThread, syncLiveTicker, resetLive, clearCaches,
 } from './chat/renderer.js';
 import {
-  renderAttachments, syncComposer, autosize, addFiles, send,
+  renderAttachments, syncReferenceButton, syncComposer, autosize, addFiles, send,
 } from './chat/composer.js';
 import {
   renderPanel, refreshFileCards, upsertMaterial, upsertPlan, loadFoundation,
@@ -853,6 +854,8 @@ Object.assign(window, {
   renderPanel,
   openFile,
   closeFile,
+  closeTask,
+  syncReferenceButton,
   latest,
 });
 window.__peRenderPanel = renderPanel;
