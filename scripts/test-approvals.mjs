@@ -387,6 +387,36 @@ await run("unexpected write exception is reflected in the tracking result", asyn
   assert.match(stored.writeback.note, /模型写回失败/);
 });
 
+await run("approval failure and tracking result roll back together", async () => {
+  const { proposal } = await createProposal();
+  const beforeRun = store.getTrackingRun(proposal.approval.runId);
+  const realUpdate = store.updateTrackingRunResult.bind(store);
+  store.updateTrackingRunResult = () => { throw new Error("simulated tracking update failure"); };
+  const throwingService = createApprovalService({
+    store,
+    broadcast: () => {},
+    applyModelChanges: async () => { throw new Error("simulated writer crash"); },
+    libreOfficeAvailable: true,
+  });
+  let result;
+  try {
+    result = await throwingService.approve({ ctx, id: proposal.approval.id });
+  } finally {
+    store.updateTrackingRunResult = realUpdate;
+  }
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "approval_sync_error");
+  assert.equal(store.getApprovalRequest(proposal.approval.id).status, "applying");
+  const unchangedRun = store.getTrackingRun(proposal.approval.runId);
+  assert.equal(unchangedRun.status, beforeRun.status);
+  assert.equal(unchangedRun.result_json, beforeRun.result_json);
+
+  assert.equal(throwingService.recoverApplying() >= 1, true);
+  assert.equal(store.getApprovalRequest(proposal.approval.id).status, "failed");
+  const recoveredRun = store.getTrackingRun(proposal.approval.runId);
+  assert.equal(JSON.parse(recoveredRun.result_json).writeback.approval.status, "failed");
+});
+
 await run("tracking settlement creates a proposal instead of writing", async () => {
   const before = versions();
   const run = store.startTrackingRun(tracking.id, { trigger: "manual", baseVersion: target.versions[0].v });
@@ -451,17 +481,19 @@ await run("out-of-band file edit is detected by re-hashing", async () => {
 });
 
 console.log("\nrecovery");
-await run("recoverApplyingApprovals turns applying into failed", async () => {
+await run("recoverApplying turns approval and tracking result into failed together", async () => {
   const { proposal } = await createProposal();
   store.transitionApproval(proposal.approval.id, {
     fromStatuses: ["pending_approval"],
     status: "applying",
     decision: { approvedAt: new Date().toISOString() },
   });
-  const recovered = store.recoverApplyingApprovals();
+  const recovered = service.recoverApplying();
   assert.equal(recovered >= 1, true);
   const after = store.getApprovalRequest(proposal.approval.id);
   assert.equal(after.status, "failed");
+  const run = store.getTrackingRun(proposal.approval.runId);
+  assert.equal(JSON.parse(run.result_json).writeback.approval.status, "failed");
 });
 
 await run("corrupt payload fails closed", async () => {

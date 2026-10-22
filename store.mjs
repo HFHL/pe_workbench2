@@ -81,6 +81,23 @@ export class Store {
 
   /* ---------- schema ---------- */
 
+  withImmediateTransaction(callback) {
+    if (typeof callback !== "function") throw new Error("transaction callback is required");
+    this.db.exec("begin immediate");
+    try {
+      const value = callback();
+      this.db.exec("commit");
+      return value;
+    } catch (error) {
+      try {
+        this.db.exec("rollback");
+      } catch {
+        /* preserve the original transaction error */
+      }
+      throw error;
+    }
+  }
+
   ensureColumn(table, column, definition) {
     const columns = this.db.prepare(`pragma table_info(${table})`).all();
     if (columns.some((item) => item.name === column)) return;

@@ -303,7 +303,7 @@ async function runPlan(ctx, planId) {
     for (const ctx of manager.list()) {
       const recovered = ctx.store.recoverTrackingRuns();
       if (recovered) logger.log?.(`[tracking] ${ctx.id}: marked ${recovered} interrupted run(s) as failed`);
-      const recoveredApprovals = ctx.store.recoverApplyingApprovals();
+      const recoveredApprovals = ctx.approvals.recoverApplying();
       if (recoveredApprovals) logger.log?.(`[approval] ${ctx.id}: marked ${recoveredApprovals} interrupted apply(s) as failed`);
       const seeded = ctx.store.seedTrackings();
       if (seeded) logger.log?.(`[tracking] ${ctx.id}: seeded ${seeded} tracking(s)`);
