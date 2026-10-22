@@ -16,6 +16,7 @@ import { createWorkbench } from "../server/create-app.mjs";
 import { normalizeTrackingResult } from "../lib/tracking.mjs";
 import { INVESTMENT_DASHBOARD } from "../lib/dashboard/contract.mjs";
 import { DASHBOARD_SECTIONS } from "../lib/dashboard/catalog.mjs";
+import { currencyFromUnit } from "../server/dashboard/service.mjs";
 import { registerDashboardComponents } from "../ui/dashboard/components/index.js";
 import {
   renderDashboardSection,
@@ -40,6 +41,14 @@ async function run(name, fn) {
 const silent = { log() {}, warn() {}, error() {} };
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pe-dashboard-test-"));
 const local = { base: "", app: null, ctx: null, full: null, partial: null, noRun: null };
+
+await run("currency parser ignores English unit words", () => {
+  assert.equal(currencyFromUnit("per share"), null);
+  assert.equal(currencyFromUnit("Per Share"), null);
+  assert.equal(currencyFromUnit("share"), null);
+  assert.equal(currencyFromUnit("CNY per share"), "CNY");
+  assert.equal(currencyFromUnit("usd/share"), "USD");
+});
 
 function makeState({
   company = "长鑫科技",

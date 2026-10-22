@@ -33,6 +33,11 @@ const CHECK_STATUS = {
 };
 const CHECK_STATUS_ORDER = ["triggered", "warning", "unknown", "armed", "retired"];
 const THESIS_STATUS = new Set(["active", "weakened", "invalidated", "confirmed", "retired"]);
+const ISO_CURRENCIES = new Set(
+  typeof Intl.supportedValuesOf === "function"
+    ? Intl.supportedValuesOf("currency")
+    : ["CNY", "USD", "HKD", "EUR", "JPY", "GBP", "AUD", "CAD", "CHF", "SGD"],
+);
 
 function text(value, max = 4000) {
   if (value === null || value === undefined) return "";
@@ -89,11 +94,12 @@ function perShareUnit(unit) {
   return typeof unit === "string" && /(?:\/\s*股|per\s*share|share)/i.test(unit);
 }
 
-function currencyFromUnit(unit) {
+export function currencyFromUnit(unit) {
   if (typeof unit !== "string") return null;
   const raw = unit.trim();
-  const isoCode = raw.toUpperCase().match(/\b([A-Z]{3})\b/)?.[1] || null;
-  if (isoCode === "RMB") return "CNY";
+  const tokens = raw.toUpperCase().match(/\b[A-Z]{3}\b/g) || [];
+  if (tokens.includes("RMB")) return "CNY";
+  const isoCode = tokens.find((token) => ISO_CURRENCIES.has(token));
   if (isoCode) return isoCode;
   if (/港元|港币/.test(raw)) return "HKD";
   if (/美元/.test(raw)) return "USD";
