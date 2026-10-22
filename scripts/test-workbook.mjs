@@ -294,7 +294,12 @@ async function main() {
     });
 
     await test("server wiring keeps upload warm-up and the API route", () => {
-      const source = fs.readFileSync(path.join(PROJECT, "server.mjs"), "utf8");
+      const source = [
+        "server/create-app.mjs",
+        "server/project-context.mjs",
+        "server/agent/session-service.mjs",
+        "server/routes/materials.mjs",
+      ].map((file) => fs.readFileSync(path.join(PROJECT, file), "utf8")).join("\n");
       assert.match(source, /function warmWorkbook\(ctx, material\)/);
       assert.ok((source.match(/warmWorkbook\(ctx, material\);/g) || []).length >= 2);
       assert.match(source, /customTools: ctx\.tools/);
