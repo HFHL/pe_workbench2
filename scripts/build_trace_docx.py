@@ -429,9 +429,14 @@ def add_cover(document):
     set_run_font(run, size=34, bold=True, color=INK)
 
     subtitle = document.add_paragraph()
-    subtitle.paragraph_format.space_after = Pt(14)
-    run = subtitle.add_run("功能、实现与使用说明")
+    subtitle.paragraph_format.space_after = Pt(4)
+    run = subtitle.add_run("操作手册")
     set_run_font(run, size=17, color=MUTED)
+
+    deck = document.add_paragraph()
+    deck.paragraph_format.space_after = Pt(14)
+    run = deck.add_run("怎么看  ·  怎么判断  ·  怎么定位改动文件")
+    set_run_font(run, size=10, color=FAINT)
 
     rule = document.add_paragraph()
     rule.paragraph_format.space_after = Pt(18)
@@ -454,7 +459,7 @@ def add_cover(document):
     rows = [
         ("版本", "2026-10-23  ·  v1.0"),
         ("适用", "Workbench 8099  ·  p-c1db281e"),
-        ("读者", "投研、产品、前端、后端"),
+        ("读者", "投研、产品、使用者（技术说明附后）"),
     ]
     for row_index, (label, value) in enumerate(rows):
         for column_index, text in enumerate((label, value)):
@@ -475,7 +480,7 @@ def add_cover(document):
     note = document.add_paragraph()
     note.paragraph_format.line_spacing = 1.5
     note.paragraph_format.space_before = Pt(10)
-    add_inline(note, "本文是使用与实现说明；设计取舍见 ", size=9, color=MUTED)
+    add_inline(note, "本文是操作手册；技术说明见第 11 节。设计取舍见 ", size=9, color=MUTED)
     add_hyperlink(note, "model-trace.md", (DOCS / "model-trace.md").as_uri(), size=9)
     add_inline(note, "。截图来自真实项目，判断卡为项目级入口。", size=9, color=MUTED)
 
@@ -657,17 +662,19 @@ def add_image(document, alt, relative_path, figure_number):
         return figure_number
     with Image.open(path) as image:
         width, height = image.size
+    aspect = width / height if height else 1
     picture_paragraph = document.add_paragraph()
     picture_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     picture_paragraph.paragraph_format.space_before = Pt(6)
     picture_paragraph.paragraph_format.space_after = Pt(2)
     picture_paragraph.paragraph_format.keep_with_next = True
-    if width >= height:
-        run = picture_paragraph.add_run()
+    run = picture_paragraph.add_run()
+    if aspect > 1.25:
         run.add_picture(str(path), width=Cm(16.2))
+    elif aspect >= 0.85:
+        run.add_picture(str(path), width=Cm(12))
     else:
-        run = picture_paragraph.add_run()
-        run.add_picture(str(path), height=Cm(10.5))
+        run.add_picture(str(path), height=Cm(12))
     caption = document.add_paragraph()
     caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
     caption.paragraph_format.space_after = Pt(8)
@@ -692,9 +699,7 @@ def add_body(document, blocks):
             if level == 2:
                 number_match = re.match(r"^(\d+)\.", text)
                 paragraph = document.add_paragraph()
-                if number_match and int(number_match.group(1)) >= 3:
-                    paragraph.paragraph_format.page_break_before = True
-                paragraph.paragraph_format.space_before = Pt(6)
+                paragraph.paragraph_format.space_before = Pt(18)
                 paragraph.paragraph_format.space_after = Pt(8)
                 paragraph.paragraph_format.keep_with_next = True
                 number = number_match.group(1) if number_match else ""
@@ -749,8 +754,8 @@ def main():
     document = Document()
     configure_styles(document)
     setup_page(document)
-    document.core_properties.title = "模型追踪：功能、实现与使用说明"
-    document.core_properties.subject = "Workbench 模型追踪使用指南"
+    document.core_properties.title = "模型追踪：操作手册"
+    document.core_properties.subject = "Workbench 模型追踪操作手册（附技术说明）"
     document.core_properties.author = "Workbench"
     document.core_properties.comments = "由 docs/model-trace-guide.md 生成"
 
