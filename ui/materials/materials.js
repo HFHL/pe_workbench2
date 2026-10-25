@@ -20,6 +20,12 @@ const renderThread = (...args) => runtime.renderThread?.(...args);
 const scheduleThread = (...args) => runtime.scheduleThread?.(...args);
 const renderAttachments = (...args) => runtime.renderAttachments?.(...args);
 const syncComposer = (...args) => runtime.syncComposer?.(...args);
+// Dialog actions owned by bootstrap/previews; late-bound through the runtime so
+// this module stays free of import cycles.
+const closeFile = (...args) => runtime.closeFile?.(...args);
+const toggleMenu = (...args) => runtime.toggleMenu?.(...args);
+const renderFileDialog = (...args) => runtime.renderFileDialog?.(...args);
+const renderTaskDialog = (...args) => runtime.renderTaskDialog?.(...args);
 
 function visibleFiles() {
   return state.files.filter(f => state.filter === 'all' || f.kind === state.filter);
@@ -330,9 +336,7 @@ async function loadFoundation() {
   }
 }
 
-/* ---------- projects ---------- */
-
-let projectLastFocus = null;
+/* ---------- materials ---------- */
 
 function upsertMaterial(material) {
   if (!material) return;

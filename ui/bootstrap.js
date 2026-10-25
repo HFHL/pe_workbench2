@@ -12,7 +12,7 @@ import {
 } from './approvals/approvals.js';
 import { toast } from './shared/toast.js';
 import {
-  openFile, closeFile, openTask, closeTask, renderTaskDialog, toggleTask, runTask,
+  openFile, closeFile, openTask, closeTask, renderFileDialog, renderTaskDialog, toggleTask, runTask,
   renderPreview, sanitizeMarkdown, loadMarked, selectVersion, restoreVersion,
   deleteOpenFile, downloadOpenFile, copyPath, onPreviewClick, onPreviewScroll,
   onPreviewPointerDown, onPreviewDoubleClick, onPreviewKeyDown, onPreviewWheel,
@@ -23,7 +23,7 @@ import { initTrace, resetTraceView, loadTrace } from './trace/panel.js';
 import { initTraceHitl } from './trace/hitl.js';
 import { closeStreams, openAgentStream, openGlobalStream } from './events/streams.js';
 import {
-  renderThread, scheduleThread, syncLiveTicker, resetLive, clearCaches,
+  renderThread, scheduleThread, syncLiveTicker, resetLive, clearCaches, mdToHtml,
 } from './chat/renderer.js';
 import {
   renderAttachments, syncReferenceButton, syncComposer, autosize, addFiles, send,
@@ -151,6 +151,10 @@ function decorateSession(item) {
       : `${updated.getMonth() + 1}/${updated.getDate()}`;
   return { ...item, group, time };
 }
+
+/* Focus to restore when the project dialog closes. Declared here (not in
+   materials.js) because open/closeProjectDialog own the focus lifecycle. */
+let projectLastFocus = null;
 
 async function loadProjects() {
   const items = await api('/api/projects');
@@ -841,6 +845,11 @@ Object.assign(runtime, {
   openTask,
   closeTask,
   renderTaskDialog,
+  renderFileDialog,
+  toggleMenu,
+  renderAttachments,
+  syncReferenceButton,
+  mdToHtml,
   loadFoundation,
   syncLiveTicker,
   syncStop,

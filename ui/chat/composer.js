@@ -2,7 +2,7 @@
 
 import {
   $, esc, icon, attachmentsEl, inputEl, sendBtn, fileInput,
-  AUDIO_PREVIEW, extOf, nextId, nowHM,
+  AUDIO_PREVIEW, extOf, kindOf, nextId, nowHM,
 } from "../shared/dom.js";
 import { state, selectors } from "../state/store.js";
 import { api, uploadFile } from "../api/client.js";

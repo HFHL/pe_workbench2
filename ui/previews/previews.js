@@ -7,7 +7,7 @@
  */
 
 import {
-  $, $$, esc, icon, overlay, fileInput,
+  $, $$, esc, icon, overlay, taskOverlay, fileInput,
   AUDIO_PREVIEW, RICH_PREVIEW, EXCEL_PREVIEW, STATUS, SOURCE,
   MAX_XLSX_FREEZE_ROWS, MAX_XLSX_FREEZE_COLS, XLSX_ZOOM_STEPS,
   kindOf, extOf, formatSize, shortTime, formatInt,
@@ -25,6 +25,11 @@ const renderPanel = () => runtime.renderPanel?.();
 const renderThread = (...args) => runtime.renderThread?.(...args);
 const scheduleThread = (...args) => runtime.scheduleThread?.(...args);
 const upsertMaterial = (material) => runtime.upsertMaterial?.(material);
+// Cross-module actions resolved at call time (bootstrap owns the runtime map).
+const renderAttachments = (...args) => runtime.renderAttachments?.(...args);
+const syncReferenceButton = (...args) => runtime.syncReferenceButton?.(...args);
+const upsertPlan = (...args) => runtime.upsertPlan?.(...args);
+const mdToHtml = (...args) => runtime.mdToHtml?.(...args);
 
 let lastFocus = null;
 
@@ -2203,7 +2208,7 @@ let toastTimer;
 
 export {
   versionFileUrl, versionWorkbookUrl, versionPdfUrl, fetchJson, renderPreview,
-  openFile, closeFile, openTask, closeTask, renderTaskDialog, toggleTask, runTask,
+  openFile, closeFile, openTask, closeTask, renderFileDialog, renderTaskDialog, toggleTask, runTask,
   sanitizeMarkdown, loadMarked, selectVersion, restoreVersion, deleteOpenFile,
   downloadOpenFile, copyPath, onPreviewClick, onPreviewScroll, onPreviewPointerDown,
   onPreviewDoubleClick, onPreviewKeyDown, onPreviewWheel, asrFileLine,
