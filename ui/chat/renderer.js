@@ -19,6 +19,7 @@ const upsertMaterial = (material) => runtime.upsertMaterial?.(material);
 const syncStop = () => runtime.syncStop?.();
 const createSession = () => runtime.createSession?.();
 const renderPanel = () => runtime.renderPanel?.();
+const renderTraceHitl = () => runtime.renderTraceHitl?.();
 
 
 function fileInline(id) {
@@ -374,6 +375,7 @@ function renderThread(scroll = false) {
         <div><div class="empty-mark">${icon('spark', 17)}</div><p class="empty-title">还没有消息</p></div>
       </div>`;
     liveArticle = null;
+    renderTraceHitl();
     void hydrateReports(threadEl);
     return;
   }
@@ -381,15 +383,18 @@ function renderThread(scroll = false) {
     if (!liveArticle || !threadEl.contains(liveArticle)) {
       threadEl.innerHTML = `<div class="thread-inner">${approvalsShelfHTML()}${messages.map(messageHTML).join('')}${liveMessageHTML()}</div>`;
       liveArticle = threadEl.querySelector('#liveMsg');
+      renderTraceHitl();
       void hydrateReports(threadEl);
     } else {
       updateLiveMessage();
+      renderTraceHitl();
     }
     if (scroll) threadEl.scrollTop = threadEl.scrollHeight;
     return;
   }
   threadEl.innerHTML = `<div class="thread-inner">${approvalsShelfHTML()}${messages.map(messageHTML).join('')}</div>`;
   liveArticle = null;
+  renderTraceHitl();
   void hydrateReports(threadEl);
   if (scroll) threadEl.scrollTop = threadEl.scrollHeight;
 }

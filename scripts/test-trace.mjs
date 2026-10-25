@@ -170,6 +170,30 @@ try {
   const fairView = fairTrace.view();
   assert.equal(fairView.entries.length, 0, "a project without a card or model starts empty");
 
+  // The judgment card has to name the number: analysis-state valuations, the
+  // scenario band and the market price all reach the view.
+  const stateRoot = path.join(dir, "state-project");
+  const stateDir = path.join(stateRoot, "exports", "investment-model", "model");
+  await fsp.mkdir(stateDir, { recursive: true });
+  await fsp.writeFile(path.join(stateDir, "analysis-state.json"), JSON.stringify({
+    subject: { company: "长鑫科技", valuation_date: "2026-09-04" },
+    market: { price: 42.85, currency: "RMB", price_date: "2026-10-23" },
+    valuations: [
+      { id: "V1", scenario: "base", value: 129, unit: "元/股", as_of: "2026-09-04" },
+      { id: "V2", scenario: "bull", value: 187, unit: "元/股" },
+      { id: "V3", scenario: "bear", value: 78, unit: "元/股" },
+    ],
+  }), "utf8");
+  const stateTrace = createTraceService({ store, projectId: "p-state", projectName: "State", root: stateRoot });
+  const stateView = stateTrace.view();
+  assert.equal(stateView.current.target, 129);
+  assert.equal(stateView.current.unit, "元/股");
+  assert.equal(stateView.current.valuationDate, "2026-09-04");
+  assert.deepEqual(stateView.current.scenarios.map((item) => item.value), [78, 129, 187]);
+  assert.equal(stateView.current.market.price, 42.85);
+  assert.equal(stateView.current.market.asOf, "2026-10-23");
+  assert.equal(stateView.current.upsidePct, 201.1);
+
   console.log("trace: ok");
 } finally {
   await fsp.rm(dir, { recursive: true, force: true });

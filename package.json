@@ -22,6 +22,7 @@
     "test:trace:e2e": "python3 scripts/test-trace-e2e.py",
     "test:framework": "node scripts/test-framework-state.mjs",
     "test:monitoring": "node scripts/test-monitoring.mjs",
+    "test:watch": "node scripts/test-watch.mjs",
     "test:monitoring:store": "node scripts/test-monitoring-store.mjs",
     "test:calc": "node scripts/test-calc-engine.mjs",
     "test:model": "node scripts/test-model-writer.mjs",

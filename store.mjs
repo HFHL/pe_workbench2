@@ -367,6 +367,117 @@ export class Store {
         created_at text not null
       );
 
+      -- 「盯」: one persistent, read-only watcher per project. The brief is a
+      -- projection of analysis-state.json; findings are chat messages, and
+      -- silence is represented by the absence of a message.
+      create table if not exists watches (
+        id text primary key,
+        workspace_id text not null,
+        name text not null default '',
+        report_path text not null default '',
+        state_path text not null default '',
+        model_path text not null default '',
+        brief_json text not null default '{}',
+        interval_minutes integer not null default 15,
+        deep_check_time text not null default '18:30',
+        enabled integer not null default 1,
+        status text not null default 'idle',
+        last_scan_at text,
+        last_check_at text,
+        last_deep_check_at text,
+        next_scan_at text,
+        next_deep_at text,
+        session_id text,
+        created_at text not null,
+        updated_at text not null
+      );
+
+      create unique index if not exists idx_watches_workspace on watches(workspace_id);
+
+      create table if not exists watch_events (
+        id text primary key,
+        workspace_id text not null,
+        watch_id text not null references watches(id) on delete cascade,
+        adapter text not null default '',
+        kind text not null default '',
+        source_tier integer not null default 3,
+        domain text not null default '',
+        url text not null default '',
+        title text not null default '',
+        published_at text,
+        snippet text not null default '',
+        content_hash text not null,
+        score integer not null default 0,
+        categories_json text not null default '[]',
+        triage_status text not null default 'new',
+        used_in_check_id text,
+        created_at text not null,
+        unique (watch_id, content_hash)
+      );
+
+      create index if not exists idx_watch_events_watch
+        on watch_events (watch_id, triage_status, created_at desc);
+
+      create table if not exists watch_checks (
+        id text primary key,
+        workspace_id text not null,
+        watch_id text not null references watches(id) on delete cascade,
+        trigger text not null default 'scan',
+        started_at text not null,
+        ended_at text,
+        status text not null default 'running',
+        candidates integer not null default 0,
+        llm_called integer not null default 0,
+        finding_count integer not null default 0,
+        result_json text,
+        error text,
+        session_id text
+      );
+
+      create index if not exists idx_watch_checks_watch
+        on watch_checks (watch_id, started_at desc);
+
+      create table if not exists watch_messages (
+        id text primary key,
+        workspace_id text not null,
+        watch_id text not null references watches(id) on delete cascade,
+        check_id text,
+        role text not null default 'watcher',
+        kind text not null default 'finding',
+        title text not null default '',
+        body text not null default '',
+        severity text not null default 'info',
+        citations_json text not null default '[]',
+        related_json text not null default '{}',
+        read_at text,
+        created_at text not null
+      );
+
+      create index if not exists idx_watch_messages_watch
+        on watch_messages (watch_id, created_at desc);
+
+      -- Append-only audit trail for every watch run, including silent scans
+      -- that never call the model. One row per source / candidate / tool call /
+      -- judgment so an admin can answer "what did it look at, and why?".
+      create table if not exists watch_logs (
+        id text primary key,
+        workspace_id text not null,
+        watch_id text not null references watches(id) on delete cascade,
+        run_id text not null,
+        run_kind text not null default 'scan',
+        seq integer not null default 0,
+        at text not null,
+        kind text not null default 'note',
+        payload_json text not null default '{}',
+        created_at text not null
+      );
+
+      create index if not exists idx_watch_logs_watch
+        on watch_logs (watch_id, created_at desc);
+
+      create index if not exists idx_watch_logs_run
+        on watch_logs (run_id, seq);
+
       create table if not exists run_changes (
         id text primary key,
         workspace_id text not null,
@@ -2110,6 +2221,467 @@ export class Store {
     }
     const row = this.db.prepare(`select * from notifications where id = ?`).get(id);
     return row ? this.notificationDto(row) : null;
+  }
+
+  /* ---------- watches (「盯」) ---------- */
+
+  getCurrentWatch() {
+    const row = this.db.prepare(
+      `select * from watches where workspace_id = ? order by created_at desc limit 1`,
+    ).get(this.projectId);
+    return row ? this.watchDto(row) : null;
+  }
+
+  getWatchRow(id) {
+    return this.db.prepare(
+      `select * from watches where id = ? and workspace_id = ?`,
+    ).get(id, this.projectId) || null;
+  }
+
+  getWatch(id) {
+    const row = this.getWatchRow(id);
+    return row ? this.watchDto(row) : null;
+  }
+
+  watchDto(row) {
+    const parse = (value, fallback) => {
+      try {
+        return value ? JSON.parse(value) : fallback;
+      } catch {
+        return fallback;
+      }
+    };
+    const lastCheck = this.db.prepare(
+      `select * from watch_checks where watch_id = ? order by started_at desc limit 1`,
+    ).get(row.id) || null;
+    const counts = this.db.prepare(
+      `select
+         sum(case when role = 'watcher' and kind = 'finding' then 1 else 0 end) as findings,
+         sum(case when role = 'watcher' and kind = 'finding' and read_at is null then 1 else 0 end) as unread
+       from watch_messages where watch_id = ?`,
+    ).get(row.id) || {};
+    const newEvents = this.db.prepare(
+      `select count(*) as count from watch_events where watch_id = ? and triage_status = 'new'`,
+    ).get(row.id)?.count || 0;
+    return {
+      id: row.id,
+      projectId: row.workspace_id,
+      name: row.name,
+      reportPath: row.report_path,
+      statePath: row.state_path,
+      modelPath: row.model_path,
+      brief: parse(row.brief_json, null),
+      intervalMinutes: row.interval_minutes,
+      deepCheckTime: row.deep_check_time,
+      enabled: !!row.enabled,
+      status: row.status,
+      lastScanAt: row.last_scan_at,
+      lastCheckAt: row.last_check_at,
+      lastDeepCheckAt: row.last_deep_check_at,
+      nextScanAt: row.next_scan_at,
+      nextDeepAt: row.next_deep_at,
+      sessionId: row.session_id,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      counts: {
+        findings: Number(counts.findings) || 0,
+        unread: Number(counts.unread) || 0,
+        newEvents,
+      },
+      lastCheck: lastCheck ? this.watchCheckDto(lastCheck) : null,
+    };
+  }
+
+  createWatch({
+    name = "",
+    reportPath = "",
+    statePath = "",
+    modelPath = "",
+    brief = null,
+    intervalMinutes = 15,
+    deepCheckTime = "18:30",
+    nextScanAt = null,
+    nextDeepAt = null,
+  } = {}) {
+    const id = uuid();
+    const now = nowIso();
+    this.db.prepare(
+      `insert into watches (
+        id, workspace_id, name, report_path, state_path, model_path, brief_json,
+        interval_minutes, deep_check_time, enabled, status, next_scan_at, next_deep_at,
+        created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'idle', ?, ?, ?, ?)`,
+    ).run(
+      id, this.projectId, name, reportPath, statePath, modelPath,
+      JSON.stringify(brief || {}),
+      Math.max(5, Math.min(240, Number(intervalMinutes) || 15)),
+      deepCheckTime,
+      nextScanAt, nextDeepAt, now, now,
+    );
+    return this.getWatch(id);
+  }
+
+  updateWatch(id, patch = {}) {
+    const row = this.getWatchRow(id);
+    if (!row) return null;
+    const fields = [];
+    const values = [];
+    const assign = (column, value) => {
+      fields.push(`${column} = ?`);
+      values.push(value);
+    };
+    if (patch.brief !== undefined) assign("brief_json", JSON.stringify(patch.brief || {}));
+    if (patch.enabled !== undefined) assign("enabled", patch.enabled ? 1 : 0);
+    if (patch.status !== undefined) assign("status", String(patch.status));
+    if (patch.intervalMinutes !== undefined) {
+      assign("interval_minutes", Math.max(5, Math.min(240, Number(patch.intervalMinutes) || 15)));
+    }
+    if (patch.deepCheckTime !== undefined) assign("deep_check_time", String(patch.deepCheckTime));
+    if (patch.name !== undefined) assign("name", String(patch.name));
+    if (patch.reportPath !== undefined) assign("report_path", String(patch.reportPath));
+    if (patch.statePath !== undefined) assign("state_path", String(patch.statePath));
+    if (patch.modelPath !== undefined) assign("model_path", String(patch.modelPath));
+    if (patch.lastScanAt !== undefined) assign("last_scan_at", patch.lastScanAt);
+    if (patch.lastCheckAt !== undefined) assign("last_check_at", patch.lastCheckAt);
+    if (patch.lastDeepCheckAt !== undefined) assign("last_deep_check_at", patch.lastDeepCheckAt);
+    if (patch.nextScanAt !== undefined) assign("next_scan_at", patch.nextScanAt);
+    if (patch.nextDeepAt !== undefined) assign("next_deep_at", patch.nextDeepAt);
+    if (patch.sessionId !== undefined) assign("session_id", patch.sessionId);
+    if (!fields.length) return this.getWatch(id);
+    assign("updated_at", nowIso());
+    this.db.prepare(`update watches set ${fields.join(", ")} where id = ? and workspace_id = ?`)
+      .run(...values, id, this.projectId);
+    return this.getWatch(id);
+  }
+
+  deleteWatch(id) {
+    const result = this.db.prepare(
+      `delete from watches where id = ? and workspace_id = ?`,
+    ).run(id, this.projectId);
+    return result.changes > 0;
+  }
+
+  createWatchEvent({
+    watchId,
+    adapter = "",
+    kind = "",
+    sourceTier = 3,
+    domain = "",
+    url = "",
+    title = "",
+    publishedAt = null,
+    snippet = "",
+    contentHash = "",
+    score = 0,
+    categories = [],
+  } = {}) {
+    if (!watchId || !title) throw new Error("watch event requires watchId and title");
+    const id = uuid();
+    const now = nowIso();
+    const result = this.db.prepare(
+      `insert or ignore into watch_events (
+        id, workspace_id, watch_id, adapter, kind, source_tier, domain, url, title,
+        published_at, snippet, content_hash, score, categories_json, triage_status, created_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?)`,
+    ).run(
+      id, this.projectId, watchId, adapter, kind, Number(sourceTier) || 3, domain, url, title,
+      publishedAt, snippet, contentHash || id, Number(score) || 0, JSON.stringify(categories || []), now,
+    );
+    if (!result.changes) return { event: null, duplicate: true };
+    const row = this.db.prepare(`select * from watch_events where id = ?`).get(id);
+    return { event: this.watchEventDto(row), duplicate: false };
+  }
+
+  watchEventDto(row) {
+    const parse = (value, fallback) => {
+      try {
+        return value ? JSON.parse(value) : fallback;
+      } catch {
+        return fallback;
+      }
+    };
+    return {
+      id: row.id,
+      watchId: row.watch_id,
+      adapter: row.adapter,
+      kind: row.kind,
+      sourceTier: row.source_tier,
+      domain: row.domain,
+      url: row.url,
+      title: row.title,
+      publishedAt: row.published_at,
+      snippet: row.snippet,
+      score: row.score,
+      categories: parse(row.categories_json, []),
+      status: row.triage_status,
+      usedInCheckId: row.used_in_check_id,
+      createdAt: row.created_at,
+    };
+  }
+
+  listWatchEvents({ watchId, status = "new", limit = 40 } = {}) {
+    const max = Math.max(1, Math.min(200, Number(limit) || 40));
+    const clauses = ["watch_id = ?", "workspace_id = ?"];
+    const params = [watchId, this.projectId];
+    if (status) {
+      clauses.push("triage_status = ?");
+      params.push(status);
+    }
+    return this.db.prepare(
+      `select * from watch_events where ${clauses.join(" and ")}
+       order by score desc, created_at desc limit ?`,
+    ).all(...params, max).map((row) => this.watchEventDto(row));
+  }
+
+  markWatchEventsUsed(ids = [], checkId = "") {
+    const list = [...new Set((Array.isArray(ids) ? ids : []).filter(Boolean))];
+    if (!list.length) return 0;
+    const statement = this.db.prepare(
+      `update watch_events set triage_status = 'used', used_in_check_id = ?
+       where id = ? and workspace_id = ?`,
+    );
+    let changed = 0;
+    for (const id of list) changed += statement.run(checkId, id, this.projectId).changes || 0;
+    return changed;
+  }
+
+  recoverWatchChecks() {
+    const rows = this.db.prepare(
+      `select id from watch_checks where workspace_id = ? and status = 'running'`,
+    ).all(this.projectId);
+    if (!rows.length) {
+      this.db.prepare(
+        `update watches set status = 'error' where workspace_id = ? and status = 'checking'`,
+      ).run(this.projectId);
+      return 0;
+    }
+    const endedAt = nowIso();
+    const statement = this.db.prepare(
+      `update watch_checks set status = 'failed', ended_at = ?, error = ?
+       where id = ? and workspace_id = ? and status = 'running'`,
+    );
+    for (const row of rows) {
+      statement.run(endedAt, "服务重启，检查中断", row.id, this.projectId);
+    }
+    this.db.prepare(
+      `update watches set status = 'error' where workspace_id = ? and status = 'checking'`,
+    ).run(this.projectId);
+    return rows.length;
+  }
+
+  createWatchCheck({ watchId, trigger = "scan", candidates = 0, sessionId = null } = {}) {
+    const id = uuid();
+    this.db.prepare(
+      `insert into watch_checks (
+        id, workspace_id, watch_id, trigger, started_at, status, candidates, session_id
+      ) values (?, ?, ?, ?, ?, 'running', ?, ?)`,
+    ).run(id, this.projectId, watchId, trigger, nowIso(), Number(candidates) || 0, sessionId);
+    return id;
+  }
+
+  finishWatchCheck(id, {
+    status = "ok",
+    llmCalled = false,
+    findingCount = 0,
+    result = null,
+    error = "",
+    sessionId = null,
+  } = {}) {
+    this.db.prepare(
+      `update watch_checks set ended_at = ?, status = ?, llm_called = ?, finding_count = ?,
+         result_json = ?, error = ?, session_id = coalesce(?, session_id)
+       where id = ? and workspace_id = ?`,
+    ).run(
+      nowIso(), status, llmCalled ? 1 : 0, Number(findingCount) || 0,
+      result ? JSON.stringify(result) : null, error || null, sessionId, id, this.projectId,
+    );
+    const row = this.db.prepare(`select * from watch_checks where id = ?`).get(id);
+    return row ? this.watchCheckDto(row) : null;
+  }
+
+  watchCheckDto(row) {
+    let result = null;
+    try {
+      result = row.result_json ? JSON.parse(row.result_json) : null;
+    } catch {
+      result = null;
+    }
+    return {
+      id: row.id,
+      watchId: row.watch_id,
+      trigger: row.trigger,
+      startedAt: row.started_at,
+      endedAt: row.ended_at,
+      status: row.status,
+      candidates: row.candidates,
+      llmCalled: !!row.llm_called,
+      findingCount: row.finding_count,
+      result,
+      error: row.error,
+      sessionId: row.session_id,
+    };
+  }
+
+  listWatchChecks(watchId, limit = 10) {
+    return this.db.prepare(
+      `select * from watch_checks where watch_id = ? and workspace_id = ?
+       order by started_at desc limit ?`,
+    ).all(watchId, this.projectId, Math.max(1, Math.min(100, Number(limit) || 10)))
+      .map((row) => this.watchCheckDto(row));
+  }
+
+  createWatchMessage({
+    watchId,
+    checkId = null,
+    role = "watcher",
+    kind = "finding",
+    title = "",
+    body = "",
+    severity = "info",
+    citations = [],
+    related = {},
+    createdAt = null,
+  } = {}) {
+    const id = uuid();
+    this.db.prepare(
+      `insert into watch_messages (
+        id, workspace_id, watch_id, check_id, role, kind, title, body, severity,
+        citations_json, related_json, read_at, created_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?)`,
+    ).run(
+      id, this.projectId, watchId, checkId, role, kind, title, body, severity,
+      JSON.stringify(citations || []), JSON.stringify(related || {}), createdAt || nowIso(),
+    );
+    const row = this.db.prepare(`select * from watch_messages where id = ?`).get(id);
+    return this.watchMessageDto(row);
+  }
+
+  watchMessageDto(row) {
+    const parse = (value, fallback) => {
+      try {
+        return value ? JSON.parse(value) : fallback;
+      } catch {
+        return fallback;
+      }
+    };
+    return {
+      id: row.id,
+      watchId: row.watch_id,
+      checkId: row.check_id,
+      role: row.role,
+      kind: row.kind,
+      title: row.title,
+      body: row.body,
+      severity: row.severity,
+      citations: parse(row.citations_json, []),
+      related: parse(row.related_json, {}),
+      readAt: row.read_at,
+      createdAt: row.created_at,
+    };
+  }
+
+  listWatchMessages({ watchId, limit = 100, after = null } = {}) {
+    const max = Math.max(1, Math.min(300, Number(limit) || 100));
+    const clauses = ["watch_id = ?", "workspace_id = ?"];
+    const params = [watchId, this.projectId];
+    if (after) {
+      clauses.push("created_at > ?");
+      params.push(after);
+    }
+    return this.db.prepare(
+      `select * from watch_messages where ${clauses.join(" and ")}
+       order by created_at asc limit ?`,
+    ).all(...params, max).map((row) => this.watchMessageDto(row));
+  }
+
+  markWatchMessagesRead(watchId) {
+    const result = this.db.prepare(
+      `update watch_messages set read_at = ? where watch_id = ? and workspace_id = ? and read_at is null`,
+    ).run(nowIso(), watchId, this.projectId);
+    return result.changes || 0;
+  }
+
+  /* ---------- watch audit logs ---------- */
+
+  appendWatchLog({
+    watchId,
+    runId,
+    runKind = "scan",
+    seq = 0,
+    at = null,
+    kind = "note",
+    payload = {},
+  } = {}) {
+    if (!watchId || !runId) throw new Error("watch log requires watchId and runId");
+    const id = uuid();
+    const createdAt = at || nowIso();
+    this.db.prepare(
+      `insert into watch_logs (
+        id, workspace_id, watch_id, run_id, run_kind, seq, at, kind, payload_json, created_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id, this.projectId, watchId, runId, runKind, Number(seq) || 0, createdAt,
+      kind, JSON.stringify(payload || {}), createdAt,
+    );
+    const row = this.db.prepare(`select * from watch_logs where id = ?`).get(id);
+    return this.watchLogDto(row);
+  }
+
+  watchLogDto(row) {
+    let payload = {};
+    try {
+      payload = row.payload_json ? JSON.parse(row.payload_json) : {};
+    } catch {
+      payload = { parseError: true };
+    }
+    return {
+      id: row.id,
+      watchId: row.watch_id,
+      runId: row.run_id,
+      runKind: row.run_kind,
+      seq: row.seq,
+      at: row.at,
+      kind: row.kind,
+      payload,
+    };
+  }
+
+  listWatchLogs({ watchId, runId = null, limit = 400, after = null } = {}) {
+    const max = Math.max(1, Math.min(2000, Number(limit) || 400));
+    const clauses = ["watch_id = ?", "workspace_id = ?"];
+    const params = [watchId, this.projectId];
+    if (runId) {
+      clauses.push("run_id = ?");
+      params.push(runId);
+    }
+    if (after) {
+      clauses.push("created_at > ?");
+      params.push(after);
+    }
+    if (runId) {
+      return this.db.prepare(
+        `select * from watch_logs where ${clauses.join(" and ")}
+         order by seq asc, created_at asc limit ?`,
+      ).all(...params, max).map((row) => this.watchLogDto(row));
+    }
+    const rows = this.db.prepare(
+      `select * from watch_logs where ${clauses.join(" and ")}
+       order by created_at desc, seq desc limit ?`,
+    ).all(...params, max);
+    return rows.reverse().map((row) => this.watchLogDto(row));
+  }
+
+  pruneWatchLogs(watchId, keep = 4000) {
+    const max = Math.max(200, Math.min(20000, Number(keep) || 4000));
+    const result = this.db.prepare(
+      `delete from watch_logs
+       where watch_id = ? and workspace_id = ?
+         and id not in (
+           select id from watch_logs where watch_id = ? and workspace_id = ?
+           order by created_at desc limit ?
+         )`,
+    ).run(watchId, this.projectId, watchId, this.projectId, max);
+    return result.changes || 0;
   }
 
   getJudgmentCard(workspaceId = this.projectId) {

@@ -182,6 +182,15 @@ def main() -> int:
                 assert "归母口径调整提案" in text and "55–85" in text
                 assert "提案" in text
                 assert "这次估值调整提案" in page.locator("#traceHitl").inner_text()
+                # The card names the number and sits after the last answer.
+                hitl = page.locator("#traceHitl").inner_text()
+                assert "当前模型估值" in hitl, hitl
+                assert "92" in hitl, hitl
+                assert page.evaluate(
+                    "(() => { const el = document.querySelector('#thread #traceHitl');"
+                    " if (!el) return false; const inner = el.closest('.thread-inner');"
+                    " return !!inner && inner.lastElementChild === el; })()"
+                )
                 assert not errors, errors
 
             def test_hitl_judge_and_cancel() -> None:

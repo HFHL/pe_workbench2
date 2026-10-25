@@ -12,6 +12,7 @@ const target = {
   activeSession: null,
   agentTransport: "legacy",
   filter: "all",
+  panelTab: "files",
   pending: [],
   picked: new Set(),
   filesOpen: true,
@@ -114,6 +115,7 @@ export function resetForProject(project) {
     s.notifications = [];
     s.approvals = [];
     s.filter = "all";
+    s.panelTab = "files";
     s.openFileId = null;
     s.selectedVersion = null;
     s.openTaskId = null;

@@ -1,6 +1,6 @@
 # 模型追踪：一条按顺序变化的估值模型历史
 
-> 状态：已实现（2026-10-22）。替代判断卡的阶段/审阅/提案结构；右侧栏「追踪」是唯一历史视图，对话区只保留一次简单判断。
+> 状态：已实现（2026-10-22）。替代判断卡的阶段/审阅/提案结构；右侧栏「追踪」是唯一历史视图，对话里只保留一次简单判断，卡片跟在最近一次回答后面。
 > 使用与实现说明（含截图、逐步操作）：[model-trace-guide.md](model-trace-guide.md)。
 > Word 版：[模型追踪-功能实现与使用说明.docx](模型追踪-功能实现与使用说明.docx)。
 
@@ -93,7 +93,17 @@ POST /api/trace/current/reset               重新从旧卡/文件播种（开�
 ```json
 {
   "subject": "长鑫存储",
-  "current": { "target": 92, "previousTarget": 129, "delta": "-28.7%", "rating": "增持（下修）" },
+  "current": {
+    "target": 92,
+    "previousTarget": 129,
+    "delta": "-28.7%",
+    "rating": "增持（下修）",
+    "unit": "元/股",
+    "valuationDate": "2026-09-01",
+    "scenarios": [{ "scenario": "bear", "value": 65 }, { "scenario": "base", "value": 92 }, { "scenario": "bull", "value": 120 }],
+    "market": { "price": 78, "currency": "RMB", "asOf": "2026-10-23" },
+    "upsidePct": 17.9
+  },
   "entries": [],
   "focus": { "id": "…", "seq": 2 },
   "pendingJudgment": null,
@@ -101,17 +111,22 @@ POST /api/trace/current/reset               重新从旧卡/文件播种（开�
 }
 ```
 
+`current` 里带估值本身：目标价、单位、估值日、情景区间、现价与相对空间。判断卡直接用它把「在判断哪个数字」写出来。
+
 ## 6. 界面
 
 - 右栏 tab：`全部 / 输入 / 产出 / 追踪 / 自动更新`。
   - `追踪`：模型变化历史（本功能）。
   - `自动更新`：原有跟踪契约，保留为后台自动更新的管理入口。
   - `计划` 与 `判断卡` tab 已移除。
-- 对话区 `#traceHitl`：
+- 对话区判断卡（`#traceHitl`，挂在 `#thread` 里最后一条消息之后，随对话滚动）：
+  - 位置：跟在 LLM 上一次问答后面，不弹窗、不遮挡对话。
+  - 数字块：当前模型估值（目标价 + 单位）、现价与相对空间、情景区间、估值日、评级。
   - 判断卡：三个选项 + 可选理由 + 记录判断。
   - 提案卡：认可提案 → 二次确认「确认采纳 / 只记录判断」。
-  - 确认卡：确认调整 / 先不改。
+  - 确认卡：确认调整 / 先不改（同样带数字块，确认前再看一眼）。
   - 完成条：一句结果 + 「查看追踪」。
+  - 卡片是常驻节点：对话流式重渲染时只重新挂载、不重建，写到一半的理由不会丢。
 
 ![追踪面板](ui-shots/model-trace-panel.png)
 
@@ -132,7 +147,7 @@ POST /api/trace/current/reset               重新从旧卡/文件播种（开�
 | `server/create-app.mjs` | `maybeRunSettled`：调用 `ctx.trace.recordRun` 并广播 `trace.updated` |
 | `server/project-context.mjs` | 每个项目创建 `ctx.trace` |
 | `ui/trace/panel.js` | 右栏追踪时间线 |
-| `ui/trace/hitl.js` | 对话区判断 / 采纳 / 确认 / 完成条 |
+| `ui/trace/hitl.js` | 对话流内判断 / 采纳 / 确认 / 完成条（挂在最后一条消息之后，含估值数字块） |
 | `ui/trace/trace.css` | 追踪与 HITL 样式 |
 | `scripts/test-trace.mjs` | 服务层测试（含 run 检测与采纳） |
 | `scripts/test-trace-hook.mjs` | agent settle 钩子测试 |

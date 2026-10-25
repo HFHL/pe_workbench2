@@ -20,7 +20,10 @@ import {
 import { runtime } from './runtime.js';
 import './dashboard/panel.js';
 import { initTrace, resetTraceView, loadTrace } from './trace/panel.js';
-import { initTraceHitl } from './trace/hitl.js';
+import {
+  initWatch, resetWatch as resetWatchPanel, upsertWatch, pushWatchMessage, removeWatch,
+} from './watch/watch.js';
+import { initTraceHitl, renderTraceHitl } from './trace/hitl.js';
 import { closeStreams, openAgentStream, openGlobalStream } from './events/streams.js';
 import {
   renderThread, scheduleThread, syncLiveTicker, resetLive, clearCaches, mdToHtml,
@@ -231,6 +234,7 @@ async function switchProject(id) {
   runtime.clearCaches?.();
   runtime.pilot?.resetForProject?.();
   window.Tracking?.reset?.();
+  resetWatchPanel();
   closeStreams();
   resetForProject(project);
   localStorage.setItem('workbench.project', project.id);
@@ -256,6 +260,7 @@ async function switchProject(id) {
     await loadSessions();
     await loadFoundation();
     await window.Tracking?.reload?.();
+    void window.Watch?.load?.();
     resetTraceView();
     void loadTrace();
     renderPanel();
@@ -283,6 +288,9 @@ function handleGlobalEvent(payload) {
   if (payload.type === 'monitor.updated') {
     Promise.resolve(window.Tracking?.reload?.()).catch(() => {});
   }
+  if (payload.type === 'watch.updated') upsertWatch(payload.watch);
+  if (payload.type === 'watch.message') pushWatchMessage(payload.message);
+  if (payload.type === 'watch.deleted') removeWatch();
   if (payload.type === 'approval.created' || payload.type === 'approval.updated') {
     if (payload.approval) {
       upsertApproval(payload.approval);
@@ -820,6 +828,11 @@ async function init() {
   } catch {
     /* the tracking panel reports its own error */
   }
+  try {
+    await initWatch();
+  } catch {
+    /* the watch panel reports its own error */
+  }
   window.NextActions?.init?.();
 
   // deep links: #file=<id>, #task=<id>
@@ -844,6 +857,7 @@ Object.assign(runtime, {
   closeFile,
   openTask,
   closeTask,
+  closeDrawers,
   renderTaskDialog,
   renderFileDialog,
   toggleMenu,
@@ -857,6 +871,7 @@ Object.assign(runtime, {
   clearCaches,
   createSession,
   connectSession,
+  renderTraceHitl,
 });
 
 // Classic companion scripts (tracking.js, suggestions.js) run before this

@@ -29,9 +29,11 @@ import { createProjectManager, ensureProjectDirs } from "./project-context.mjs";
 import { createSessionService } from "./agent/session-service.mjs";
 import { lastAssistantText, makeTitle } from "./agent/snapshot.mjs";
 import { createTrackingService } from "./tracking/service.mjs";
+import { createWatchService } from "./watch/service.mjs";
 import { createTrackingScheduler } from "./schedulers/tracking.mjs";
 import { createMonitorScheduler } from "./schedulers/monitor.mjs";
 import { createSourceScheduler } from "./schedulers/source.mjs";
+import { createWatchScheduler } from "./schedulers/watch.mjs";
 import { handleAgUiRequest } from "../lib/agent-protocol/ag-ui-endpoint.mjs";
 import { openStore } from "../store.mjs";
 import {
@@ -53,6 +55,7 @@ import { handleCopilotKit } from "./routes/copilotkit.mjs";
 import { handleSessions } from "./routes/sessions.mjs";
 import { handleMaterials } from "./routes/materials.mjs";
 import { handleTracking } from "./routes/tracking.mjs";
+import { handleWatch } from "./routes/watch.mjs";
 import { handleTrace } from "./routes/trace.mjs";
 import { handlePlans } from "./routes/plans.mjs";
 import { handleTesting } from "./routes/testing.mjs";
@@ -327,6 +330,8 @@ async function runPlan(ctx, planId) {
       if (recovered) logger.log?.(`[tracking] ${ctx.id}: marked ${recovered} interrupted run(s) as failed`);
       const recoveredApprovals = ctx.approvals.recoverApplying();
       if (recoveredApprovals) logger.log?.(`[approval] ${ctx.id}: marked ${recoveredApprovals} interrupted apply(s) as failed`);
+      const recoveredWatch = ctx.store.recoverWatchChecks();
+      if (recoveredWatch) logger.log?.(`[watch] ${ctx.id}: marked ${recoveredWatch} interrupted check(s) as failed`);
       const seeded = ctx.store.seedTrackings();
       if (seeded) logger.log?.(`[tracking] ${ctx.id}: seeded ${seeded} tracking(s)`);
     }
@@ -383,6 +388,20 @@ async function runPlan(ctx, planId) {
     pollSourceBinding,
     nowIso,
     enabled: config.sourceSchedulerEnabled,
+    logger,
+  });
+
+  const watch = createWatchService({
+    config,
+    bus,
+    projectManager,
+    sessions,
+    logger,
+  });
+  const watchScheduler = createWatchScheduler({
+    contexts: projectManager.contexts,
+    watchService: watch,
+    enabled: config.watchSchedulerEnabled,
     logger,
   });
 
@@ -496,6 +515,9 @@ async function handleApi(req, res, url) {
   ) {
     return handleTracking({ req, res, url, app, ctx });
   }
+  if (pathname === "/api/watch" || pathname.startsWith("/api/watch/")) {
+    return handleWatch({ req, res, url, app, ctx });
+  }
   return json(res, 404, { error: "not found" });
 }
 
@@ -534,6 +556,7 @@ async function handleApi(req, res, url) {
         trackingScheduler.start();
         monitorScheduler.start();
         sourceScheduler.start();
+        watchScheduler.start();
         resolve({ port: actualPort, host, url: `http://${host}:${actualPort}` });
       });
     });
@@ -543,6 +566,7 @@ async function handleApi(req, res, url) {
     trackingScheduler.stop();
     monitorScheduler.stop();
     sourceScheduler.stop();
+    watchScheduler.stop();
     sessions?.close();
     projectManager?.close();
     bus.close();
@@ -559,6 +583,7 @@ async function handleApi(req, res, url) {
     defaultStore,
     sessions,
     tracking,
+    watch,
     http: { json, readBody, readJson, sendText, MIME },
     getModel,
     MODEL_ID,
@@ -589,7 +614,12 @@ async function handleApi(req, res, url) {
     normalizeMonitorItem,
     validateMonitorPlan,
     nowIso,
-    schedulers: { tracking: trackingScheduler, monitor: monitorScheduler, source: sourceScheduler },
+    schedulers: {
+      tracking: trackingScheduler,
+      monitor: monitorScheduler,
+      source: sourceScheduler,
+      watch: watchScheduler,
+    },
     server,
     listen,
     close,
@@ -603,6 +633,8 @@ async function handleApi(req, res, url) {
     pollSourceBinding,
     ingestUploadEvent,
     triageSourceEvent,
+    watch,
+    watchService: watch,
     broadcastMaterial,
     broadcastTracking,
     broadcastPlan,

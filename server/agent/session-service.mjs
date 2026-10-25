@@ -93,7 +93,31 @@ export function createSessionService({
     return { block: true, reason: `${toolName} 只能访问当前项目内的路径` };
   }
 
-  async function createEntry({ id, file, ctx }) {
+  /**
+   * Optional per-session write scope: when `writeRoots` is provided, write/edit
+   * may only target those project-relative prefixes. The watcher uses this to
+   * stay read-only: it can write its result JSON under `.watch/` but never the
+   * report, state file or model.
+   */
+  function blockOutsideWriteRoots(ctx, toolName, args, writeRoots) {
+    if (!Array.isArray(writeRoots) || !writeRoots.length) return null;
+    if (!["write", "edit"].includes(toolName)) return null;
+    const candidate = args?.path;
+    if (typeof candidate !== "string" || !candidate) {
+      return { block: true, reason: "「盯」是只读的：写操作必须给出项目内路径" };
+    }
+    const root = path.resolve(ctx.root);
+    const absolute = path.resolve(root, candidate);
+    const rel = path.relative(root, absolute).split(path.sep).join("/");
+    const allowed = writeRoots.some((scope) => {
+      const prefix = String(scope || "").replace(/^\/+/, "").replace(/\/+$/, "");
+      return prefix && (rel === prefix || rel.startsWith(`${prefix}/`));
+    });
+    if (allowed) return null;
+    return { block: true, reason: `「盯」是只读的：只能写 ${writeRoots.join("、")} 下的结果文件` };
+  }
+
+  async function createEntry({ id, file, ctx, writeRoots = null }) {
     if (!ctx) throw Object.assign(new Error("project not found"), { status: 404 });
 
     let session;
@@ -118,8 +142,11 @@ export function createSessionService({
       session = created.session;
     }
 
-    session.agent.beforeToolCall = async ({ toolCall, args }) =>
-      blockOutsideProject(ctx, toolCall.name, args) ?? undefined;
+    session.agent.beforeToolCall = async ({ toolCall, args }) => {
+      const outside = blockOutsideProject(ctx, toolCall.name, args);
+      if (outside) return outside;
+      return blockOutsideWriteRoots(ctx, toolCall.name, args, writeRoots) ?? undefined;
+    };
 
     const entry = {
       id: session.sessionId,
@@ -165,7 +192,7 @@ export function createSessionService({
   async function listSessions(ctx) {
     const infos = config.fakeAgent ? [] : await SessionManager.list(ctx.root, ctx.sessionsDir);
     const items = infos
-      .filter((info) => !/^\[(计划|跟踪)\]/.test(String(info.name || "")))
+      .filter((info) => !/^\[(计划|跟踪|盯)\]/.test(String(info.name || "")))
       .map((info) => ({
         id: info.id,
         title: info.name || makeTitle(info.firstMessage) || "未命名会话",
@@ -175,7 +202,7 @@ export function createSessionService({
 
     for (const entry of live.values()) {
       if (entry.ctx.id !== ctx.id) continue;
-      if (/^\[(计划|跟踪)\]/.test(String(entry.session.sessionName || entry.title || ""))) continue;
+      if (/^\[(计划|跟踪|盯)\]/.test(String(entry.session.sessionName || entry.title || ""))) continue;
       const item = {
         id: entry.id,
         title: entry.session.sessionName || entry.title || "新会话",

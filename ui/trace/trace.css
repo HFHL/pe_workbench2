@@ -75,29 +75,50 @@
   .trp-now-value{font-size:20px}
 }
 
-/* ---------- chat HITL ---------- */
+/* ---------- chat HITL: inline, right after the last answer ---------- */
 
-#traceHitl{padding:0 24px 2px}
-.trh-card{max-width:740px;margin:0 auto 8px;border:1px solid var(--line-2);border-radius:10px;background:var(--surface);padding:10px 12px 9px;box-shadow:0 2px 10px rgba(20,20,18,.04)}
-.trh-card.is-confirm{border-color:#CFCABF;background:linear-gradient(180deg,var(--surface),var(--surface-2))}
+/* The card is appended to `.thread-inner`, so it scrolls with the conversation
+   instead of sitting on top of it. Same 28px gutter as `.msg` keeps it aligned
+   with the answer it follows. */
+
+#traceHitl{padding:0}
+.trh-msg{display:grid;grid-template-columns:28px minmax(0,1fr);gap:12px;align-items:start}
+.trh-avatar{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;flex:none;border:1px solid var(--line-2);background:var(--bone);color:var(--ink-2);line-height:1}
+.trh-main{min-width:0;border:1px solid var(--line-2);border-radius:11px;background:var(--surface);padding:11px 13px 11px;box-shadow:0 1px 3px rgba(20,20,18,.025)}
+.trh-main.is-confirm{border-color:#CFCABF;background:linear-gradient(180deg,var(--surface),var(--surface-2))}
 .trh-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:9px;color:var(--faint);line-height:1.4}
 .trh-kicker{letter-spacing:.08em;text-transform:uppercase;font-weight:600}
 .trh-when{font-variant-numeric:tabular-nums;white-space:nowrap}
-.trh-title{font-size:14px;font-weight:560;letter-spacing:-.01em;line-height:1.35;color:var(--ink);margin-top:4px}
-.trh-change{font-size:10.5px;line-height:1.45;color:var(--muted);margin-top:3px}
-.trh-changes{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+.trh-title{font-size:15px;font-weight:560;letter-spacing:-.01em;line-height:1.35;color:var(--ink);margin-top:5px}
+.trh-change{font-size:11px;line-height:1.45;color:var(--muted);margin-top:3px}
+
+/* the number being judged */
+.trh-val{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-top:9px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2)}
+.trh-val.is-soft{align-items:center}
+.trh-val-main{min-width:0}
+.trh-val-label{display:block;font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);font-weight:600;line-height:1.3}
+.trh-val-num{display:block;font-size:25px;font-weight:600;line-height:1.1;letter-spacing:-.025em;font-variant-numeric:tabular-nums;color:var(--ink);margin-top:1px;overflow-wrap:anywhere}
+.trh-val-num small{font-size:10px;font-weight:500;letter-spacing:0;color:var(--muted);margin-left:6px}
+.trh-val-side{display:flex;flex-direction:column;align-items:flex-end;gap:1px;text-align:right;padding-bottom:2px}
+.trh-val-market{font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.trh-val-gap{font-size:12px;font-weight:560;font-variant-numeric:tabular-nums;white-space:nowrap}
+.trh-val-gap.up{color:var(--green-fg)}
+.trh-val-gap.down{color:var(--red-fg)}
+.trh-val-foot{display:flex;flex-wrap:wrap;gap:4px 10px;margin-top:5px;font-size:9px;color:var(--faint);line-height:1.45;font-variant-numeric:tabular-nums}
+
+.trh-changes{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px}
 .trh-changes span{font-size:9px;line-height:1.4;padding:1px 5px;border:1px solid var(--line);border-radius:4px;background:var(--surface-2);color:var(--ink-2)}
-.trh-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin-top:9px}
-.trh-option{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:7px 8px;border:1px solid var(--line-2);border-radius:7px;background:var(--surface);text-align:left;transition:border-color .12s,background .12s}
+.trh-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}
+.trh-option{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:7px 9px;border:1px solid var(--line-2);border-radius:7px;background:var(--surface);text-align:left;transition:border-color .12s,background .12s}
 .trh-option:hover{border-color:#CFCABF;background:var(--bone)}
 .trh-option b{font-size:12px;font-weight:560;color:var(--ink-2)}
 .trh-option small{font-size:9px;color:var(--faint)}
 .trh-option.is-active{border-color:var(--ink);background:var(--ink)}
 .trh-option.is-active b{color:#F6F2E8}
 .trh-option.is-active small{color:rgba(246,242,232,.66)}
-.trh-card textarea{display:block;width:100%;margin-top:7px;border:1px solid var(--line-2);border-radius:6px;background:var(--surface-2);padding:6px 7px;font-size:10.5px;line-height:1.45;color:var(--ink-2);outline:none;resize:vertical;min-height:38px}
-.trh-card textarea:focus{border-color:#B9B3A6;box-shadow:0 0 0 2px rgba(20,20,18,.05);background:var(--surface)}
-.trh-card textarea::placeholder{color:var(--faint)}
+.trh-main textarea{display:block;width:100%;margin-top:8px;border:1px solid var(--line-2);border-radius:6px;background:var(--surface-2);padding:6px 7px;font-size:10.5px;line-height:1.45;color:var(--ink-2);outline:none;resize:vertical;min-height:38px}
+.trh-main textarea:focus{border-color:#B9B3A6;box-shadow:0 0 0 2px rgba(20,20,18,.05);background:var(--surface)}
+.trh-main textarea::placeholder{color:var(--faint)}
 .trh-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px}
 .trh-hint{font-size:9px;color:var(--faint);line-height:1.4}
 .trh-btn{height:28px;padding:0 12px;border:1px solid var(--line-2);border-radius:6px;background:var(--surface);color:var(--ink-2);font-size:11.5px;display:inline-flex;align-items:center;justify-content:center;gap:4px;white-space:nowrap;transition:background .14s,border-color .14s}
@@ -105,25 +126,30 @@
 .trh-btn.primary{background:#1B1B19;border-color:#1B1B19;color:#F6F2E8}
 .trh-btn.primary:hover{background:#2B2B27}
 .trh-btn[disabled]{opacity:.45;cursor:not-allowed}
-.trh-sub{font-size:10.5px;line-height:1.55;color:var(--ink-2);margin-top:6px;padding:6px 7px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2)}
+.trh-sub{font-size:10.5px;line-height:1.55;color:var(--ink-2);margin-top:7px;padding:6px 7px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2)}
 .trh-note{font-family:"Songti SC","STSong",Georgia,serif;font-size:11px;line-height:1.5;color:var(--ink-2);margin-top:5px;padding:5px 7px;border-left:2px solid #D8D2C3;background:var(--surface-2);border-radius:0 5px 5px 0}
 .trh-actions{display:flex;gap:6px;margin-top:9px}
 .trh-adopt{margin-top:7px;padding:7px 8px;border:1px solid #E2DCF5;border-radius:7px;background:var(--violet-bg);font-size:10.5px;line-height:1.5;color:var(--violet-fg)}
 .trh-adopt-actions{display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap}
 .trh-adopt-actions .trh-link{margin-left:2px;color:var(--violet-fg)}
-.trh-done{max-width:740px;margin:0 auto 8px;display:flex;align-items:center;gap:6px;border:1px solid #D8E5D8;border-radius:8px;background:var(--green-bg);padding:6px 9px;font-size:10px;line-height:1.4;color:var(--green-fg)}
+.trh-done{margin-left:40px;display:flex;align-items:center;gap:6px;border:1px solid #D8E5D8;border-radius:8px;background:var(--green-bg);padding:6px 9px;font-size:10px;line-height:1.4;color:var(--green-fg)}
 .trh-done svg{flex:none}
 .trh-done span{flex:1;min-width:0}
 .trh-link{border:0;background:none;padding:0;color:inherit;font-size:9.5px;text-decoration:underline;text-underline-offset:2px;white-space:nowrap}
 .trh-link:hover{opacity:.75}
 
 @media (max-width:980px){
-  #traceHitl{padding:0 14px 0}
-  .trh-card{max-width:none;border-radius:9px;padding:9px 10px 8px}
-  .trh-done{max-width:none}
+  .trh-msg{grid-template-columns:22px minmax(0,1fr);gap:9px}
+  .trh-avatar{width:22px;height:22px;border-radius:6px}
+  .trh-main{border-radius:9px;padding:10px 11px}
+  .trh-title{font-size:14px}
+  .trh-val-num{font-size:23px}
+  .trh-done{margin-left:31px}
 }
 
 @media (max-width:520px){
+  .trh-val{flex-direction:column;align-items:flex-start;gap:6px}
+  .trh-val-side{flex-direction:row;align-items:baseline;gap:8px;text-align:left;padding-bottom:0}
   .trh-options{grid-template-columns:1fr}
   .trh-option{flex-direction:row;align-items:baseline;gap:6px}
   .trh-actions{flex-direction:column}

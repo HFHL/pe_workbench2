@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="suggestions.css">
 <link rel="stylesheet" href="dashboard.css">
 <link rel="stylesheet" href="ui/trace/trace.css">
+<link rel="stylesheet" href="ui/watch/watch.css">
 </head>
 <body>
 <div class="desk">
@@ -87,7 +88,6 @@
         </header>
 
         <div class="thread" id="thread"></div>
-        <div id="traceHitl" class="trace-hitl-slot" hidden></div>
 
         <div class="composer-wrap" id="dropZone">
           <div class="next-actions" id="nextActions" hidden></div>
@@ -114,29 +114,45 @@
           <div class="rp-title"><span id="panelTitle">资料</span><span class="rp-count" id="fileCount">0</span></div>
           <div class="rp-head-actions">
             <button class="icon-btn" id="newTrackBtn" aria-label="新建跟踪" title="新建跟踪" hidden><svg class="i" width="15" height="15"><use href="#i-plus"/></svg></button>
-            <button class="icon-btn" id="filesClose" aria-label="收起资料面板"><svg class="i" width="16" height="16"><use href="#i-chevron-right"/></svg></button>
+            <button class="icon-btn" id="filesClose" aria-label="收起右侧面板"><svg class="i" width="16" height="16"><use href="#i-chevron-right"/></svg></button>
           </div>
         </header>
-        <div class="rp-filters" id="fileFilters" role="tablist" aria-label="资料分类">
-          <button class="filter is-active" data-filter="all" role="tab" aria-selected="true">全部</button>
-          <button class="filter" data-filter="input" role="tab" aria-selected="false">输入</button>
-          <button class="filter" data-filter="output" role="tab" aria-selected="false">产出</button>
-          <button class="filter" data-filter="trace" role="tab" aria-selected="false">追踪</button>
-          <button class="filter" data-filter="tracking" role="tab" aria-selected="false">自动更新</button>
+        <div class="rp-tabs" id="panelTabs" role="tablist" aria-label="右侧视图">
+          <button class="rp-tab is-active" data-panel="files" role="tab" aria-selected="true">资料</button>
+          <button class="rp-tab" data-panel="watch" role="tab" aria-selected="false">盯</button>
         </div>
-        <div class="rp-hint" id="fileHint" hidden>
-          <span class="hint-icon" aria-hidden="true"><svg class="i" width="13" height="13"><use href="#i-check-square"/></svg></span>
-          <span class="hint-text">勾选资料，引用到输入框</span>
-          <button type="button" class="hint-action" id="pickAllBtn">全选</button>
+        <div class="rp-view" id="filesView">
+          <div class="rp-filters" id="fileFilters" role="tablist" aria-label="资料分类">
+            <button class="filter is-active" data-filter="all" role="tab" aria-selected="true">全部</button>
+            <button class="filter" data-filter="input" role="tab" aria-selected="false">输入</button>
+            <button class="filter" data-filter="output" role="tab" aria-selected="false">产出</button>
+            <button class="filter" data-filter="trace" role="tab" aria-selected="false">追踪</button>
+            <button class="filter" data-filter="tracking" role="tab" aria-selected="false">自动更新</button>
+          </div>
+          <div class="rp-hint" id="fileHint" hidden>
+            <span class="hint-icon" aria-hidden="true"><svg class="i" width="13" height="13"><use href="#i-check-square"/></svg></span>
+            <span class="hint-text">勾选资料，引用到输入框</span>
+            <button type="button" class="hint-action" id="pickAllBtn">全选</button>
+          </div>
+          <div class="rp-list" id="fileList"></div>
+          <div class="rp-pickbar" id="filePickbar" hidden>
+            <span class="pickbar-count" aria-live="polite"><strong id="pickCount">0</strong> 份已选</span>
+            <button type="button" class="pickbar-clear" id="pickClear">清除</button>
+            <button type="button" class="btn primary small" id="pickReference">
+              <svg class="i" width="13" height="13" aria-hidden="true"><use href="#i-link"/></svg>
+              引用到输入框
+            </button>
+          </div>
         </div>
-        <div class="rp-list" id="fileList"></div>
-        <div class="rp-pickbar" id="filePickbar" hidden>
-          <span class="pickbar-count" aria-live="polite"><strong id="pickCount">0</strong> 份已选</span>
-          <button type="button" class="pickbar-clear" id="pickClear">清除</button>
-          <button type="button" class="btn primary small" id="pickReference">
-            <svg class="i" width="13" height="13" aria-hidden="true"><use href="#i-link"/></svg>
-            引用到输入框
-          </button>
+        <div class="rp-view watch-view" id="watchView" hidden>
+          <div class="watch-status" id="watchStatus" aria-live="polite"></div>
+          <div class="watch-thread" id="watchThread"></div>
+          <form class="watch-composer" id="watchComposer">
+            <textarea id="watchInput" rows="1" placeholder="问点什么，或让它重点盯某个点…" aria-label="问盯盘助手"></textarea>
+            <button class="watch-send" id="watchSend" type="submit" aria-label="发送" disabled>
+              <svg class="i" width="15" height="15"><use href="#i-arrow-up"/></svg>
+            </button>
+          </form>
         </div>
       </aside>
     </div>
@@ -219,6 +235,7 @@
 <div class="overlay track-overlay" id="trackSetupOverlay" hidden></div>
 <div class="overlay track-overlay" id="trackScheduleOverlay" hidden></div>
 <div class="overlay dash-overlay" id="dashboardOverlay" hidden></div>
+<div class="overlay watch-log-overlay" id="watchLogOverlay" hidden></div>
 
 <div class="overlay" id="projectOverlay" hidden>
   <form class="dialog project-dialog" id="projectDialog" role="dialog" aria-modal="true" aria-labelledby="projectDialogTitle" tabindex="-1">

@@ -91,6 +91,13 @@ export async function loadConfig({ env = process.env, root = REPO_ROOT } = {}) {
     monitorSchedulerEnabled: env.MONITOR_SCHEDULER !== "0",
     sourceSchedulerEnabled: env.SOURCE_SCHEDULER !== "0",
     trackingMaxRuntimeMs: Number(env.TRACKING_MAX_RUNTIME_MS || 15 * 60 * 1000),
+    // 「盯」: read-only watcher. The rule scan is cheap; the LLM gate only runs
+    // when candidates appear, plus one deep check per day.
+    watchSchedulerEnabled: env.WATCH_SCHEDULER !== "0",
+    watchIntervalMinutes: Number(env.WATCH_INTERVAL_MINUTES || 30),
+    watchDeepCheckTime: env.WATCH_DEEP_CHECK_TIME || "18:30",
+    watchMaxRuntimeMs: Number(env.WATCH_MAX_RUNTIME_MS || 5 * 60 * 1000),
+    watchAskTimeoutMs: Number(env.WATCH_ASK_TIMEOUT_MS || 3 * 60 * 1000),
     calcInfo: await sofficeInfo(),
   });
 }

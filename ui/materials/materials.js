@@ -32,6 +32,20 @@ function visibleFiles() {
 }
 
 function renderPanel() {
+  if (state.panelTab === 'watch') {
+    const filesView = $('#filesView');
+    const watchView = $('#watchView');
+    if (filesView) filesView.hidden = true;
+    if (watchView) watchView.hidden = false;
+    const newTrack = $('#newTrackBtn');
+    if (newTrack) newTrack.hidden = true;
+    window.Watch?.renderPanel?.();
+    return;
+  }
+  const filesView = $('#filesView');
+  const watchView = $('#watchView');
+  if (filesView) filesView.hidden = false;
+  if (watchView) watchView.hidden = true;
   const tasks = state.filter === 'tasks';
   const tracking = state.filter === 'tracking';
   const trace = state.filter === 'trace';

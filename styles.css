@@ -180,6 +180,7 @@ svg{display:block}
 .file-inline span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 .thread-empty{min-height:100%;display:grid;place-items:center;text-align:center}
+.thread-empty[hidden]{display:none}
 .empty-mark{width:38px;height:38px;margin:0 auto 10px;border:1px solid var(--line-2);border-radius:10px;background:var(--surface-2);display:grid;place-items:center;color:var(--muted)}
 .empty-title{font-size:15px;font-weight:500;color:var(--ink-2)}
 
