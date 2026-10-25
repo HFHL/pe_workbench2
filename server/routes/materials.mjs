@@ -2,10 +2,11 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import { AUDIO_EXTS } from "../../lib/asr-status.mjs";
 
 export async function handleMaterials({ req, res, url, app, ctx }) {
-  const { json, readJson, sendText, MIME } = app.http;
-  const { withAsr, warmWorkbook, warmPdf, warmAsr, ingestUploadEvent, serveVersionFile, broadcastGlobal, nowIso, WORKBOOK_QUERY, PDF_READ, ASR_ENABLED } = app;
+  const { json, readBody, readJson, sendText, MIME } = app.http;
+  const { withAsr, warmWorkbook, warmPdf, warmAsr, ingestUploadEvent, serveVersionFile, broadcastGlobal, broadcastMaterial, nowIso, WORKBOOK_QUERY, PDF_READ, ASR_ENABLED } = app;
   const pathname = url.pathname;
   if (pathname === "/api/materials" && req.method === "GET") {
     return json(res, 200, ctx.store.listMaterials().map((material) => withAsr(ctx, material)));

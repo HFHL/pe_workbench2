@@ -559,7 +559,7 @@ async function handleApi(req, res, url) {
     defaultStore,
     sessions,
     tracking,
-    http: { json, readJson, sendText, MIME },
+    http: { json, readBody, readJson, sendText, MIME },
     getModel,
     MODEL_ID,
     makeTitle,
