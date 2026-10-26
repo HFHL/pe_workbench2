@@ -19,12 +19,14 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { Store } from "../store.mjs";
 import { WorkbookStore } from "../lib/workbook-store.mjs";
+import { ExcelPreviewStore } from "../lib/excel-preview.mjs";
 import { createWorkbookTool, workspaceRel } from "../lib/workbook-tool.mjs";
 import { tokenize, queryGraph, formatResult } from "../lib/workbook-query.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT = path.dirname(HERE);
 const FIXTURE_SCRIPT = path.join(HERE, "fixtures", "make-workbook-fixture.py");
+const CORRUPT_FIXTURE = path.join(HERE, "fixtures", "make-corrupt-workbook.py");
 const PYTHON = process.env.PYTHON_BIN || "python3";
 const REAL = process.argv.includes("--real");
 
@@ -251,6 +253,72 @@ async function main() {
         status: "synced",
       });
       await assert.rejects(() => workbooks.summary(legacy.id), /旧版 \.xls/);
+    });
+
+    console.log("\ndamaged optional parts");
+    const corruptFixtures = [
+      ["emf", /图片/, /ZeroDivisionError/],
+      ["drawing", /图形\/图表/, /XML|Premature/],
+      ["comments", /辅助部件/, /comments/],
+      ["hyperlink", /格式与装饰/, /sheet1\.xml/],
+    ];
+    const corruptMaterials = new Map();
+    for (const [mode, warningPattern, detailPattern] of corruptFixtures) {
+      const relPath = `uploads/corrupt-${mode}.xlsx`;
+      const absolute = path.join(workspace, relPath);
+      const generated = spawnSync(PYTHON, [CORRUPT_FIXTURE, absolute, mode], {
+        encoding: "utf8",
+      });
+      assert.equal(generated.status, 0, generated.stderr || `fixture ${mode} failed`);
+      const material = store.indexFile(relPath, {
+        kind: "input",
+        source: "upload",
+        author: "test",
+        note: `corrupt ${mode}`,
+        status: "synced",
+      });
+      corruptMaterials.set(mode, material);
+
+      await test(`corrupt ${mode}: cell data survives`, async () => {
+        const summary = await workbooks.summary(material.id);
+        assert.equal(summary.status, "ready");
+        assert.ok(summary.stats.formulaCount >= 6, "formulas");
+        assert.ok(
+          summary.warnings.some((warning) => warningPattern.test(warning)),
+          `expected ${warningPattern} in ${JSON.stringify(summary.warnings)}`,
+        );
+        assert.ok(
+          summary.warnings.some((warning) => detailPattern.test(warning)),
+          `expected ${detailPattern} in ${JSON.stringify(summary.warnings)}`,
+        );
+
+        const result = await workbooks.queryMaterial(material.id, "Gross margin", {
+          maxCells: 8,
+        });
+        assert.ok(
+          result.cells.some((cell) => cell.label.includes("Gross margin")),
+          "Gross margin cell missing",
+        );
+        assert.match(result.text, /注意：/);
+        assert.equal(result.warnings.length, summary.warnings.length);
+      });
+    }
+
+    await test("preview survives the damaged EMF image", async () => {
+      const previews = new ExcelPreviewStore({
+        store,
+        cacheDir: path.join(dataDir, "doc-cache"),
+      });
+      const material = corruptMaterials.get("emf");
+      const version = store.latestVersion(material.id);
+      const manifest = await previews.manifest(material.id, version.v);
+      assert.equal(manifest.sheets[0].name, "Model");
+      assert.ok(manifest.warnings.length > 0, "preview warnings");
+      const sheet = await previews.sheet(material.id, version.v, "Model");
+      assert.ok(
+        sheet.cells.some((cell) => cell[2] === "Gross margin"),
+        "preview lost cell data",
+      );
     });
 
     console.log("\ntool + units");

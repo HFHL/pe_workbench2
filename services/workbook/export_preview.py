@@ -37,7 +37,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-PARSER_VERSION = 2
+PARSER_VERSION = 3
 SCHEMA_VERSION = 1
 
 MAX_ROWS = 4_000
@@ -60,6 +60,8 @@ try:  # openpyxl is already required by the workbook graph parser.
     from openpyxl.styles.colors import COLOR_INDEX
     from openpyxl.utils import get_column_letter
     from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
+
+    from openpyxl_safe import load_workbook_resilient
 except ModuleNotFoundError as error:  # pragma: no cover - host dependent
     print(
         "openpyxl is required: pip install openpyxl (missing module: %s)" % error.name,
@@ -70,6 +72,20 @@ except ModuleNotFoundError as error:  # pragma: no cover - host dependent
 
 def ext_of(path: Path) -> str:
     return path.suffix.lower()
+
+
+def dedupe_warnings(messages: list[str], limit: int = 20) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for message in messages:
+        text = " ".join(str(message).split())[:320]
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+        if len(result) >= limit:
+            break
+    return result
 
 
 def safe_value(value: Any) -> Any:
@@ -346,42 +362,68 @@ def workbook_props(wb: Any) -> dict:
 
 def export_preview(path: Path) -> dict:
     started = time.time()
+    warnings_out: list[str] = []
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        wb = openpyxl.load_workbook(path, data_only=False, read_only=False, keep_links=False)
-        wb_values = openpyxl.load_workbook(path, data_only=True, read_only=False, keep_links=False)
+        wb, load_warnings = load_workbook_resilient(
+            path, data_only=False, read_only=False, keep_links=False
+        )
+        warnings_out.extend(load_warnings)
+        try:
+            wb_values, cached_warnings = load_workbook_resilient(
+                path, data_only=True, read_only=False, keep_links=False
+            )
+            warnings_out.extend(cached_warnings)
+        except Exception as error:  # noqa: BLE001 - formulas are still usable
+            wb_values = None
+            warnings_out.append(
+                "缓存值读取失败，公式单元格显示公式文本"
+                f"（{type(error).__name__}: {error}）"
+            )
 
     style_index: dict[tuple, int] = {}
     style_table: list[dict] = []
     sheets: list[dict] = []
-    warnings_out: list[str] = []
 
     for ws in wb.worksheets:
         try:
-            payload = sheet_payload(ws, wb_values[ws.title], style_index, style_table)
+            values_ws = wb_values[ws.title] if wb_values is not None else None
+            payload = sheet_payload(ws, values_ws, style_index, style_table)
             sheets.append(payload)
         except Exception as error:  # keep the rest of the workbook usable
             warnings_out.append(f"{ws.title}: {error}")
 
     total_cells = sum(len(sheet["cells"]) for sheet in sheets)
     truncated_sheets = [sheet["name"] for sheet in sheets if sheet["truncated"]]
+    warnings_out = dedupe_warnings(warnings_out)
     stats = {
         "sheetCount": len(sheets),
         "cellCount": total_cells,
         "styleCount": len(style_table),
         "truncatedSheets": truncated_sheets,
+        "warningCount": len(warnings_out),
         "parseMs": int((time.time() - started) * 1000),
     }
+
+    try:
+        props = workbook_props(wb)
+    except Exception as error:  # noqa: BLE001 - metadata is optional
+        warnings_out.append(f"文档属性读取失败（{type(error).__name__}: {error}）")
+        props = {}
+
+    warnings_out = dedupe_warnings(warnings_out)
+    stats["warningCount"] = len(warnings_out)
 
     return {
         "schemaVersion": SCHEMA_VERSION,
         "parserVersion": PARSER_VERSION,
         "fileName": path.name,
-        "props": workbook_props(wb),
+        "props": props,
         "styles": style_table,
         "sheets": sheets,
         "stats": stats,
-        "warnings": warnings_out[:20],
+        "warnings": warnings_out,
     }
 
 

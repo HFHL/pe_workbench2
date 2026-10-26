@@ -86,6 +86,26 @@ curl -s -X POST localhost:8080/api/materials/<id>/query \
 | 503 | Python / openpyxl 缺失 |
 | 504 | 解析超时（120 s） |
 
+### 损坏的非单元格部件
+
+整份文件读不出来，通常不是单元格的问题，而是 openpyxl 在加载时顺带解析的图片、图表、批注、表格或透视表坏了。例如 2026-10 的「泡泡马特Model.xlsx」里有一张 0×0 的 EMF 图片（`xl/media/image1.emf`），Pillow 在算 DPI 时抛 `ZeroDivisionError`，openpyxl 直接中止，整本模型都查不到。
+
+现在 `services/workbook/openpyxl_safe.py` 做了三层降级，只丢坏掉的那部分：
+
+1. **图形/图表/图片**：逐个解析，坏的那一张/一个跳过并记 warning；同一 drawing 里完好的图片和其他 sheet 照常；
+2. **批注/表格/透视表/外部链接**：如果仍失败，复制一份临时包并去掉这些部件及其引用后重试；
+3. **工作表装饰**：必要时只保留 `sheetData`、合并区域和列宽，去掉冻结窗格、超链接、条件格式等。
+
+单元格、公式、缓存值、样式、合并和列宽都会原样保留，原文件不会被修改。跳过的内容写入解析结果的 `warnings`，查询文本里会显示一行「注意：…」。只有单元格 XML 本身损坏/加密/不是 zip 时才会继续报 422。
+
+```json
+{
+  "status": "ready",
+  "stats": {"formulaCount": 12051, "warningCount": 1},
+  "warnings": ["图片无法解析，已跳过（xl/media/image1.emf：ZeroDivisionError: float division by zero）"]
+}
+```
+
 ## 3. 存储与状态
 
 ```sql
@@ -111,7 +131,8 @@ create table document_parses (
 
 | 文件 | 作用 |
 |---|---|
-| [services/workbook/parse_workbook.py](../services/workbook/parse_workbook.py) | 生产解析器：JSON-safe、范围展开、输入节点、行列标签 |
+| [services/workbook/parse_workbook.py](../services/workbook/parse_workbook.py) | 生产解析器：JSON-safe、范围展开、输入节点、行列标签、逐 sheet 容错 |
+| [services/workbook/openpyxl_safe.py](../services/workbook/openpyxl_safe.py) | 容错加载：跳过损坏的图片/图表/批注等可选部件，返回 warnings |
 | [lib/workbook-store.mjs](../lib/workbook-store.mjs) | sha 缓存、gzip、SQLite 元数据、LRU、解析队列、错误映射 |
 | [lib/workbook-query.mjs](../lib/workbook-query.mjs) | 中文/英文检索、子图扩展、格式化、summary |
 | [lib/workbook-tool.mjs](../lib/workbook-tool.mjs) | Pi 自定义工具 `workbook_query` |
@@ -119,20 +140,21 @@ create table document_parses (
 | [store.mjs](../store.mjs) | `document_parses` 表、`latestVersion()` |
 | [scripts/test-workbook.mjs](../scripts/test-workbook.mjs) | fixture + 真实模型 + 失败模式测试 |
 | [scripts/fixtures/make-workbook-fixture.py](../scripts/fixtures/make-workbook-fixture.py) | 生成测试 xlsx |
+| [scripts/fixtures/make-corrupt-workbook.py](../scripts/fixtures/make-corrupt-workbook.py) | 生成损坏图片/图形/批注/超链接的测试 xlsx |
 
 ## 5. 验收结果
 
 ### 自动测试
 
 ```bash
-npm run test:workbook        # fixture，20 项
+npm run test:workbook        # fixture，26 项
 npm run test:workbook:real   # 加两份真实上传模型
 ```
 
-最近一次（2026-10-19）：
+最近一次（2026-10-26）：
 
 ```
-20 passed, 0 failed
+26 passed, 0 failed
 
 real models
   HERMES-INTERNATIONAL_HRMS.PA…xlsm: 4943ms, formulas=62862, cache=1998559B, hits=4520
@@ -152,7 +174,8 @@ real models
 - 空 query、伪 xlsx、`.xls`、Python 缺失、解析超时；
 - 工具路径越界；
 - 中文两字词分词；
-- `formatResult` 有界且不是表格。
+- `formatResult` 有界且不是表格；
+- 0×0 EMF 图片、损坏 drawing、损坏批注、悬空超链接：单元格数据仍可查询，且 `warnings` 有提示。
 
 ### 真机（8099 临时实例）
 
@@ -192,6 +215,7 @@ node -e "const {DatabaseSync}=require('node:sqlite');new DatabaseSync('data/work
 - 单 sheet 超过 10,000 行或 512 列的部分会被截断（P0 保护内存）。
 - 检索是关键词 + 同义词 + 依赖扩展，不是语义检索；排序仍需 golden set 调。
 - 解析内存峰值约 476 MB（4.9 MB / 62k 公式模型）；并发 1、LRU 2。
+- 图片、图表、批注、条件格式本身不进入公式图；它们损坏时会被跳过并写入 `warnings`，不影响单元格数据。
 - 扫描版 PDF 不支持（P1 再评估 OCR）。
 
 ## 8. 后续（P1/P2）

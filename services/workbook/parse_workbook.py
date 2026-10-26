@@ -29,11 +29,13 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-PARSER_VERSION = 1
+PARSER_VERSION = 2
 
 try:
     import openpyxl
     from openpyxl.utils import column_index_from_string, get_column_letter
+
+    from openpyxl_safe import load_workbook_resilient
 except ModuleNotFoundError as error:  # pragma: no cover - depends on the host
     print(
         "openpyxl is required: pip install openpyxl (missing module: %s)" % error.name,
@@ -281,12 +283,130 @@ def nearest_text(
     return row_label, col_label
 
 
+def dedupe_warnings(messages: list[str], limit: int = 20) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for message in messages:
+        text = " ".join(str(message).split())[:320]
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def parse_sheet(
+    ws: Any, values_ws: Any | None
+) -> tuple[
+    dict[str, Any],
+    dict[tuple[int, int], Any],
+    tuple[dict[int, str], dict[int, str]],
+    dict[str, dict[str, Any]],
+    dict[str, set[str]],
+    set[str],
+    list[int],
+]:
+    """Read one worksheet into graph pieces.
+
+    A genuinely broken sheet raises; the caller records a warning and keeps
+    the other sheets instead of failing the whole workbook.
+    """
+    max_row = min(ws.max_row or 1, MAX_ROWS)
+    max_col = min(ws.max_column or 1, MAX_COLS)
+    merge_map = build_merge_map(ws)
+
+    values: dict[tuple[int, int], Any] = {}
+    sheet_formulas: dict[tuple[int, int], str] = {}
+    computed: dict[tuple[int, int], Any] = {}
+
+    for row in ws.iter_rows(min_row=1, max_row=max_row, max_col=max_col):
+        for cell in row:
+            raw = cell.value
+            if raw is None:
+                raw = merge_map.get((cell.row, cell.column))
+            if raw is None:
+                continue
+            values[(cell.row, cell.column)] = raw
+            if isinstance(raw, str) and raw.startswith("="):
+                sheet_formulas[(cell.row, cell.column)] = raw
+                if values_ws is not None:
+                    computed[(cell.row, cell.column)] = values_ws.cell(
+                        cell.row, cell.column
+                    ).value
+
+    display: dict[tuple[int, int], Any] = {}
+    for key, raw in values.items():
+        if key in sheet_formulas:
+            cached = computed.get(key)
+            display[key] = cached if cached is not None else raw
+        else:
+            display[key] = raw
+
+    label_cols = profile_sheet(ws, display, sheet_formulas)
+    row_labels, col_labels = build_labels(display, max_row, max_col, label_cols)
+
+    formulas: dict[str, dict[str, Any]] = {}
+    formula_refs: dict[str, set[str]] = {}
+    referenced: set[str] = set()
+    for (row, col), formula in sheet_formulas.items():
+        row_label, col_label = nearest_text(
+            display, sheet_formulas, row, col, label_cols, col_labels
+        )
+        computed_value = computed.get((row, col))
+        cid = cell_id(ws.title, row, col)
+        refs = extract_refs(formula, ws.title)
+        formula_refs[cid] = refs
+        referenced.update(refs)
+        formulas[cid] = {
+            "formula": formula[:MAX_FORMULA_CHARS],
+            "value": safe_value(
+                computed_value if computed_value is not None else display.get((row, col))
+            ),
+            "row": row,
+            "col": col,
+            "rowLabel": row_label,
+            "colLabel": col_label,
+        }
+
+    sheet = {
+        "name": ws.title,
+        "rows": max_row,
+        "cols": max_col,
+        "formulaCount": len(sheet_formulas),
+        "rowLabels": {str(k): v for k, v in row_labels.items()},
+        "colLabels": {str(k): v for k, v in col_labels.items()},
+    }
+    return (
+        sheet,
+        display,
+        (row_labels, col_labels),
+        formulas,
+        formula_refs,
+        referenced,
+        label_cols,
+    )
+
+
 def parse_workbook(path: Path) -> dict[str, Any]:
     started = time.time()
     warnings: list[str] = []
 
-    wb = openpyxl.load_workbook(path, data_only=False, read_only=False)
-    wb_values = openpyxl.load_workbook(path, data_only=True, read_only=False)
+    wb, load_warnings = load_workbook_resilient(path, data_only=False, read_only=False)
+    warnings.extend(load_warnings)
+
+    values_wb = None
+    try:
+        values_wb, cached_warnings = load_workbook_resilient(
+            path, data_only=True, read_only=False
+        )
+        warnings.extend(cached_warnings)
+    except Exception as error:  # noqa: BLE001 - formulas are still usable
+        warnings.append(
+            "缓存值读取失败，公式单元格暂时按公式文本显示"
+            f"（{type(error).__name__}: {error}）"
+        )
 
     sheets: list[dict[str, Any]] = []
     cells: list[list[Any]] = []
@@ -297,77 +417,50 @@ def parse_workbook(path: Path) -> dict[str, Any]:
     sheet_labels: dict[str, tuple[dict[int, str], dict[int, str]]] = {}
 
     for ws in wb.worksheets:
-        max_row = min(ws.max_row or 1, MAX_ROWS)
-        max_col = min(ws.max_column or 1, MAX_COLS)
-        ws_values = wb_values[ws.title]
-        merge_map = build_merge_map(ws)
+        values_ws = None
+        if values_wb is not None:
+            try:
+                values_ws = values_wb[ws.title]
+            except KeyError:
+                warnings.append(f"{ws.title}: 缓存值工作表缺失，公式将按公式文本处理。")
 
-        values: dict[tuple[int, int], Any] = {}
-        sheet_formulas: dict[tuple[int, int], str] = {}
-        computed: dict[tuple[int, int], Any] = {}
-
-        for row in ws.iter_rows(min_row=1, max_row=max_row, max_col=max_col):
-            for cell in row:
-                raw = cell.value
-                if raw is None:
-                    raw = merge_map.get((cell.row, cell.column))
-                if raw is None:
-                    continue
-                values[(cell.row, cell.column)] = raw
-                if isinstance(raw, str) and raw.startswith("="):
-                    sheet_formulas[(cell.row, cell.column)] = raw
-                    computed[(cell.row, cell.column)] = ws_values.cell(
-                        cell.row, cell.column
-                    ).value
-
-        display: dict[tuple[int, int], Any] = {}
-        for key, raw in values.items():
-            if key in sheet_formulas:
-                cached = computed.get(key)
-                display[key] = cached if cached is not None else raw
-            else:
-                display[key] = raw
-
-        label_cols = profile_sheet(ws, display, sheet_formulas)
-        row_labels, col_labels = build_labels(display, max_row, max_col, label_cols)
-
-        for (row, col), formula in sheet_formulas.items():
-            row_label, col_label = nearest_text(
-                display, sheet_formulas, row, col, label_cols, col_labels
+        try:
+            (
+                sheet,
+                display,
+                labels,
+                sheet_formulas,
+                sheet_refs,
+                sheet_referenced,
+                label_cols,
+            ) = parse_sheet(ws, values_ws)
+        except Exception as error:  # noqa: BLE001 - keep the other sheets
+            warnings.append(
+                f"{ws.title}: 工作表解析失败，已跳过（{type(error).__name__}: {error}）"
             )
-            computed_value = computed.get((row, col))
-            cid = cell_id(ws.title, row, col)
-            refs = extract_refs(formula, ws.title)
-            formula_refs[cid] = refs
-            referenced.update(refs)
-            formulas[cid] = {
-                "formula": formula[:MAX_FORMULA_CHARS],
-                "value": safe_value(
-                    computed_value if computed_value is not None else display.get((row, col))
-                ),
-                "row": row,
-                "col": col,
-                "rowLabel": row_label,
-                "colLabel": col_label,
-            }
-        sheet_values[ws.title] = display
-        sheet_labels[ws.title] = (row_labels, col_labels)
+            continue
 
-        sheets.append(
-            {
-                "name": ws.title,
-                "rows": max_row,
-                "cols": max_col,
-                "formulaCount": len(sheet_formulas),
-                "rowLabels": {str(k): v for k, v in row_labels.items()},
-                "colLabels": {str(k): v for k, v in col_labels.items()},
-            }
-        )
+        sheets.append(sheet)
+        sheet_values[ws.title] = display
+        sheet_labels[ws.title] = labels
+        formulas.update(sheet_formulas)
+        formula_refs.update(sheet_refs)
+        referenced.update(sheet_referenced)
         print(
             f"  {ws.title}: {len(sheet_formulas)} formulas, "
-            f"labelCols={label_cols}, colLabels={len(col_labels)}",
+            f"labelCols={label_cols}, colLabels={len(labels[1])}",
             file=sys.stderr,
         )
+
+    for workbook in (wb, values_wb):
+        if workbook is None:
+            continue
+        try:
+            workbook.close()
+        except Exception:  # noqa: BLE001 - best effort
+            pass
+
+    warnings = dedupe_warnings(warnings)
 
     # Referenced cells without a formula are input nodes. They may be
     # referenced by a sheet other than the one they live in, so resolve them
@@ -451,6 +544,7 @@ def parse_workbook(path: Path) -> dict[str, Any]:
         "cellCount": len(cells),
         "edgeCount": len(edges),
         "sheets": len(sheets),
+        "warningCount": len(warnings),
         "parseMs": int((time.time() - started) * 1000),
     }
 
@@ -497,6 +591,8 @@ def main() -> None:
 
     print(f"Parsing {args.file} ...", file=sys.stderr)
     result = parse_workbook(args.file)
+    for message in result.get("warnings", []):
+        print(f"  warning: {message}", file=sys.stderr)
     text = json.dumps(
         result,
         ensure_ascii=False,

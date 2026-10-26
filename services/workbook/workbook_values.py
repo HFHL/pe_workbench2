@@ -21,6 +21,8 @@ from pathlib import Path
 
 try:
     import openpyxl
+
+    from openpyxl_safe import load_workbook_resilient
 except ImportError:  # pragma: no cover - environment guard
     print(json.dumps({"ok": False, "error": "openpyxl is not installed"}))
     sys.exit(1)
@@ -43,20 +45,28 @@ def parse_value(raw: str):
         return raw
 
 
-def read_cells(file: str, refs: list[str], data_only: bool = True) -> dict:
-    workbook = openpyxl.load_workbook(file, data_only=data_only, read_only=True)
+def read_cells(
+    file: str, refs: list[str], data_only: bool = True
+) -> tuple[dict, list[str]]:
+    workbook, load_warnings = load_workbook_resilient(
+        file, data_only=data_only, read_only=True
+    )
     values = {}
-    for ref in refs:
-        sheet, cell = split_ref(ref)
-        if sheet not in workbook.sheetnames:
-            raise ValueError(f"sheet not found: {sheet}")
-        values[ref] = workbook[sheet][cell].value
-    workbook.close()
-    return values
+    try:
+        for ref in refs:
+            sheet, cell = split_ref(ref)
+            if sheet not in workbook.sheetnames:
+                raise ValueError(f"sheet not found: {sheet}")
+            values[ref] = workbook[sheet][cell].value
+    finally:
+        workbook.close()
+    return values, load_warnings
 
 
-def write_cells(file: str, out: str, assignments: list[str]) -> str:
-    workbook = openpyxl.load_workbook(file, data_only=False)
+def write_cells(
+    file: str, out: str, assignments: list[str]
+) -> tuple[str, list[str]]:
+    workbook, load_warnings = load_workbook_resilient(file, data_only=False)
     for assignment in assignments:
         if "=" not in assignment:
             raise ValueError(f"assignment must be Sheet!A1=value: {assignment}")
@@ -68,7 +78,7 @@ def write_cells(file: str, out: str, assignments: list[str]) -> str:
     target = Path(out)
     target.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(target)
-    return str(target)
+    return str(target), load_warnings
 
 
 def main() -> int:
@@ -88,13 +98,19 @@ def main() -> int:
     args = parser.parse_args()
     try:
         if args.command == "read":
-            print(json.dumps({
-                "ok": True,
-                "values": read_cells(args.file, args.refs, data_only=not args.formulas),
-            }))
+            values, load_warnings = read_cells(
+                args.file, args.refs, data_only=not args.formulas
+            )
+            payload = {"ok": True, "values": values}
+            if load_warnings:
+                payload["warnings"] = load_warnings
+            print(json.dumps(payload))
         else:
-            path = write_cells(args.file, args.out, args.assignments)
-            print(json.dumps({"ok": True, "path": path}))
+            path, load_warnings = write_cells(args.file, args.out, args.assignments)
+            payload = {"ok": True, "path": path}
+            if load_warnings:
+                payload["warnings"] = load_warnings
+            print(json.dumps(payload))
     except Exception as error:  # keep the CLI machine-readable
         print(json.dumps({"ok": False, "error": str(error)}))
         return 1
