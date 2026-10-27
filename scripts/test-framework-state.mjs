@@ -109,6 +109,473 @@ console.log("状态契约校验");
   );
 }
 
+console.log("估值口径、方法切换与归因");
+
+// 这些用例只验证结构规则；数值用于复现 1560/320/458 的方法切换链路，不构成投资判断。
+
+function makeMethodSwitchState(state, overrides = {}) {
+  state.revision = 4;
+  const a1 = state.assumptions.find((item) => item.id === "A1");
+  a1.value = 20;
+  a1.statement = "2026E ARR 20 亿美元";
+  a1.unit = "亿美元";
+  const a2 = state.assumptions.find((item) => item.id === "A2");
+  a2.value = 10;
+  a2.statement = "目标倍数 10x";
+  a2.unit = "x ARR";
+
+  state.assumptions.push(
+    {
+      id: "A11", statement: "汇率 7.8 HKD/USD", value: 7.8, unit: "HKD/USD", period: "2026E",
+      kind: "model_input", evidence_ids: ["E1"], status: "active",
+    },
+    {
+      id: "A12", statement: "股数 4.876 亿股", value: 4.876, unit: "亿股", period: "2026E",
+      kind: "model_input", evidence_ids: ["E1"], status: "active",
+    },
+  );
+
+  const v1 = state.valuations.find((item) => item.id === "V1");
+  v1.value = 1560;
+  v1.method_key = "dcf";
+  v1.method = "高盛 DCF";
+  v1.output = "target_price";
+  v1.drivers = [
+    { assumption_id: "A4", role: "base_metric", value: 5.2, unit: "元/股" },
+    { assumption_id: "A6", role: "discount_rate", value: 0.12, unit: "比例" },
+  ];
+  v1.assumption_ids = ["A1", "A2", "A3", "A4", "A6"];
+  v1.status = "superseded";
+  v1.superseded_by = "V4";
+  delete v1.multiple_basis;
+  delete v1.multiple_period;
+
+  state.valuations.push({
+    id: "V4",
+    scenario: "base",
+    method_key: "arr_multiple",
+    method: "ARR 倍数法",
+    output: "target_price",
+    multiple_basis: "ARR",
+    multiple_period: "2026E",
+    as_of: "2026-10-26",
+    value: 320,
+    unit: "港元/股",
+    drivers: [
+      { assumption_id: "A1", role: "base_metric", value: 20, unit: "亿美元" },
+      { assumption_id: "A2", role: "multiple", value: 10, unit: "x ARR" },
+      { assumption_id: "A11", role: "fx", value: 7.8, unit: "HKD/USD" },
+      { assumption_id: "A12", role: "share_count", value: 4.876, unit: "亿股" },
+    ],
+    assumption_ids: ["A1", "A2", "A11", "A12"],
+    thesis_ids: ["T1"],
+    evidence_ids: ["E1"],
+    formula: "20 × 10 × 7.8 ÷ 4.876 ≈ 320 港元/股",
+    limitations: "倍数法一阶近似",
+    status: "current",
+    superseded_by: null,
+  });
+
+  state.changes = [{
+    id: "C1",
+    at: "2026-10-26",
+    revision: 4,
+    kind: "method_switch",
+    affected_ids: ["V1", "V4", "A1", "A2", "A11", "A12"],
+    from_valuation_id: "V1",
+    to_valuation_id: "V4",
+    comparability: "not_comparable",
+    comparability_reason: "DCF 与 ARR 倍数法的基准、倍数口径和公式都不同",
+    bridge: [
+      { factor: "方法", from: "DCF", to: "ARR 倍数法" },
+      { factor: "基准指标", from: "DCF 现金流", to: "2026E ARR 20 亿美元" },
+    ],
+    value_before: 1560,
+    value_after: 320,
+    before: "DCF base 1560",
+    after: "ARR 倍数法 base 320",
+    reason: "DCF 表读取失败后改用 ARR 倍数法",
+    evidence_ids: ["E1"],
+    run_id: "test",
+  }];
+  Object.assign(state.changes[0], overrides);
+}
+
+function makeAttributionState(state, attribution, options = {}) {
+  state.revision = options.revision ?? 4;
+  const a1 = state.assumptions.find((item) => item.id === "A1");
+  a1.value = 26;
+  a1.statement = "2026E ARR 26 亿美元";
+  a1.unit = "亿美元";
+  const a2 = state.assumptions.find((item) => item.id === "A2");
+  a2.value = 11;
+  a2.statement = "目标倍数 11x";
+  a2.unit = "x ARR";
+
+  const v1 = state.valuations.find((item) => item.id === "V1");
+  v1.value = options.valueAfter ?? 458;
+  v1.method_key = "arr_multiple";
+  v1.method = "ARR 倍数法";
+  v1.output = "target_price";
+  v1.multiple_basis = "ARR";
+  v1.multiple_period = "2026E";
+  v1.unit = "港元/股";
+  v1.drivers = [
+    { assumption_id: "A1", role: "base_metric", value: 26, unit: "亿美元" },
+    { assumption_id: "A2", role: "multiple", value: 11, unit: "x ARR" },
+  ];
+  v1.assumption_ids = ["A1", "A2"];
+  v1.status = "current";
+  v1.superseded_by = null;
+  v1.formula = "26 × 11 × 7.8 ÷ 4.876 ≈ 458 港元/股";
+
+  state.changes = [{
+    id: options.changeId ?? "C1",
+    at: options.at ?? "2026-10-26",
+    revision: options.revision ?? 4,
+    kind: "assumption_update",
+    affected_ids: ["V1", "A1", "A2"],
+    from_valuation_id: "V1",
+    to_valuation_id: "V1",
+    comparability: "comparable",
+    value_before: options.valueBefore ?? 320,
+    value_after: options.valueAfter ?? 458,
+    attribution,
+    combination: options.combination ?? "multiplicative",
+    residual: options.residual ?? 0.00125,
+    before: "2026E ARR 20 亿美元、10x",
+    after: "2026E ARR 26 亿美元、11x",
+    reason: "ARR 与倍数调整",
+    evidence_ids: options.evidenceIds ?? ["E1"],
+    run_id: "test",
+  }];
+  if (options.stabilityNote) state.changes[0].stability_note = options.stabilityNote;
+}
+
+{
+  const file = writeTemp("legacy-20.json", (state) => {
+    state.schema_version = "2.0";
+  });
+  const result = validate(file);
+  check(
+    "schema 2.0 历史文件仍可通过并提示兼容",
+    result.status === 0 && result.output.includes("schema 2.0"),
+    result.output.trim(),
+  );
+}
+{
+  const file = writeTemp("historical-change-legacy.json", (state) => {
+    state.revision = 4;
+    state.changes = [{
+      id: "C1",
+      at: "2026-10-25",
+      revision: 3,
+      affected_ids: ["V1"],
+      before: "旧口径",
+      after: "新口径",
+      reason: "历史变化，保留 2.0 写法",
+      evidence_ids: ["E1"],
+      run_id: "test",
+    }];
+  });
+  const result = validate(file);
+  check(
+    "2.1 中历史 change 可保留旧写法（只警告）",
+    result.status === 0 && result.output.includes("历史 change"),
+    result.output.trim(),
+  );
+}
+{
+  const file = writeTemp("current-change-legacy.json", (state) => {
+    state.revision = 4;
+    state.changes = [{
+      id: "C1",
+      at: "2026-10-26",
+      revision: 4,
+      affected_ids: ["V1"],
+      before: "旧口径",
+      after: "新口径",
+      reason: "当前 revision 但缺 2.1 字段",
+      evidence_ids: ["E1"],
+      run_id: "test",
+    }];
+  });
+  const result = validate(file);
+  check(
+    "当前 revision 的 change 缺 kind/from-to 被拦下",
+    result.status === 1 && result.output.includes("当前 revision 的 change"),
+    result.output.trim(),
+  );
+}
+{
+  const file = writeTemp("method-switch.json", (state) => makeMethodSwitchState(state));
+  const result = validate(file);
+  check("方法切换：新 V + 旧 V superseded + bridge 通过", result.status === 0, result.output.trim());
+}
+{
+  const file = writeTemp("method-switch-comparable.json", (state) => {
+    makeMethodSwitchState(state, { comparability: "comparable" });
+  });
+  const result = validate(file);
+  check(
+    "方法切换被标成可比被拦下",
+    result.status === 1 && result.output.includes("必须是 not_comparable"),
+    result.output.trim(),
+  );
+}
+{
+  const file = writeTemp("method-switch-no-bridge.json", (state) => {
+    makeMethodSwitchState(state, { bridge: [] });
+  });
+  const result = validate(file);
+  check(
+    "方法切换缺 bridge 被拦下",
+    result.status === 1 && result.output.includes(".bridge 至少 2 项"),
+    result.output.trim(),
+  );
+}
+{
+  const file = writeTemp("method-switch-same-v.json", (state) => {
+    makeMethodSwitchState(state, { to_valuation_id: "V1" });
+  });
+  const result = validate(file);
+  check(
+    "方法切换指向同一个 V 被拦下",
+    result.status === 1 && result.output.includes("新建 V"),
+    result.output.trim(),
+  );
+}
+{
+  const file = writeTemp("attribution-ok.json", (state) => {
+    makeAttributionState(state, [
+      { assumption_id: "A1", from: 20, to: 26, contribution: 0.30 },
+      { assumption_id: "A2", from: 10, to: 11, contribution: 0.10 },
+    ]);
+  });
+  const result = validate(file);
+  check("320→458 同时归因 ARR 与倍数通过", result.status === 0, result.output.trim());
+}
+{
+  const file = writeTemp("attribution-missing-arr.json", (state) => {
+    makeAttributionState(state, [
+      { assumption_id: "A2", from: 10, to: 11, contribution: 0.10 },
+    ]);
+  });
+  const result = validate(file);
+  check(
+    "320→458 只归因倍数被拦下（遗漏 ARR）",
+    result.status === 1 && result.output.includes("归因不完整"),
+    result.output.trim(),
+  );
+}
+{
+  const file = writeTemp("attribution-indirect.json", (state) => {
+    makeAttributionState(state, [
+      { assumption_id: "A1", from: 20, to: 26, contribution: 0.30 },
+      { assumption_id: "A2", from: 10, to: 11, contribution: 0.10 },
+      { assumption_id: "A3", from: 0.22, to: 0.24, contribution: 0.02 },
+    ]);
+  });
+  const result = validate(file);
+  check(
+    "把不进入公式的 A3 列为归因被拦下",
+    result.status === 1 && result.output.includes("不是 V1 的公式驱动"),
+    result.output.trim(),
+  );
+}
+{
+  const file = writeTemp("attribution-inference.json", (state) => {
+    makeAttributionState(state, [
+      { assumption_id: "A1", from: 20, to: 26, contribution: 0.30 },
+      { assumption_id: "A2", from: 10, to: 11, contribution: 0.10 },
+    ], { evidenceIds: ["E7"] });
+  });
+  const result = validate(file);
+  check(
+    "估值变化只引 inference 被拦下",
+    result.status === 1 && result.output.includes("非 inference"),
+    result.output.trim(),
+  );
+}
+{
+  const file = writeTemp("attribution-no-multiple-basis.json", (state) => {
+    makeAttributionState(state, [
+      { assumption_id: "A1", from: 20, to: 26, contribution: 0.30 },
+      { assumption_id: "A2", from: 10, to: 11, contribution: 0.10 },
+    ]);
+    delete state.valuations.find((item) => item.id === "V1").multiple_basis;
+  });
+  const result = validate(file);
+  check(
+    "有 multiple 驱动但缺 multiple_basis 被拦下",
+    result.status === 1 && result.output.includes("multiple_basis"),
+    result.output.trim(),
+  );
+}
+{
+  const file = writeTemp("same-day-reversal.json", (state) => {
+    makeAttributionState(state, [
+      { assumption_id: "A1", from: 20, to: 26, contribution: 0.30 },
+      { assumption_id: "A2", from: 10, to: 11, contribution: 0.10 },
+    ], { valueAfter: 458, revision: 4 });
+    const a2 = state.assumptions.find((item) => item.id === "A2");
+    a2.value = 10;
+    const v1 = state.valuations.find((item) => item.id === "V1");
+    v1.value = 400;
+    v1.drivers.find((driver) => driver.assumption_id === "A2").value = 10;
+    state.revision = 5;
+    state.changes.push({
+      id: "C2",
+      at: "2026-10-26",
+      revision: 5,
+      kind: "assumption_update",
+      affected_ids: ["V1", "A2"],
+      from_valuation_id: "V1",
+      to_valuation_id: "V1",
+      comparability: "comparable",
+      value_before: 458,
+      value_after: 400,
+      attribution: [{ assumption_id: "A2", from: 11, to: 10, contribution: 10 / 11 - 1 }],
+      combination: "multiplicative",
+      residual: 400 / 458 - 1 - (10 / 11 - 1),
+      before: "458",
+      after: "400",
+      reason: "下调倍数",
+      evidence_ids: ["E7"],
+      run_id: "test",
+    });
+  });
+  const result = validate(file);
+  check(
+    "同日反向修正缺 stability_note 被拦下",
+    result.status === 1 && result.output.includes("stability_note"),
+    result.output.trim(),
+  );
+  check(
+    "同日反向修正只引推断证据被拦下",
+    result.status === 1 && result.output.includes("缺少新增非推断证据"),
+    result.output.trim(),
+  );
+}
+{
+  const file = writeTemp("method-switch-then-reverse.json", (state) => {
+    makeMethodSwitchState(state);
+    const a1 = state.assumptions.find((item) => item.id === "A1");
+    a1.value = 26;
+    const a2 = state.assumptions.find((item) => item.id === "A2");
+    a2.value = 11;
+    const v4 = state.valuations.find((item) => item.id === "V4");
+    v4.value = 458;
+    v4.drivers.find((driver) => driver.assumption_id === "A1").value = 26;
+    v4.drivers.find((driver) => driver.assumption_id === "A2").value = 11;
+    state.revision = 5;
+    state.changes.push({
+      id: "C2",
+      at: "2026-10-26",
+      revision: 5,
+      kind: "assumption_update",
+      affected_ids: ["V4", "A1", "A2"],
+      from_valuation_id: "V4",
+      to_valuation_id: "V4",
+      comparability: "comparable",
+      value_before: 320,
+      value_after: 458,
+      attribution: [
+        { assumption_id: "A1", from: 20, to: 26, contribution: 0.30 },
+        { assumption_id: "A2", from: 10, to: 11, contribution: 0.10 },
+      ],
+      combination: "multiplicative",
+      residual: 0.00125,
+      before: "320",
+      after: "458",
+      reason: "ARR 20→26、倍数 10→11",
+      evidence_ids: ["E7"],
+      run_id: "test",
+    });
+  });
+  const result = validate(file);
+  check(
+    "智谱式方法切换 + 同日反向修正：缺 stability_note 被拦下",
+    result.status === 1 && result.output.includes("stability_note"),
+    result.output.trim(),
+  );
+  check(
+    "智谱式方法切换 + 同日反向修正：只引推断证据被拦下",
+    result.status === 1 && result.output.includes("缺少新增非推断证据"),
+    result.output.trim(),
+  );
+}
+{
+  const file = writeTemp("tool-failure-undisclosed.json", (state) => {
+    state.model.checks.push({
+      id: "CHK3",
+      item: "DCF 折现率/终值增长率未披露",
+      result: "unverified",
+      reason: "tool_failure",
+      locator: "DCF!C48:C49",
+      attempted: "workbook_query",
+      gap_ids: ["G3"],
+      note: "解析报错",
+    });
+    state.gaps.push({
+      id: "G3",
+      question: "DCF 参数读取失败",
+      impact: "无法复核 DCF",
+      evidence_needed: "修复读取",
+      kind: "tool",
+      status: "open",
+    });
+  });
+  const result = validate(file);
+  check(
+    "tool_failure 写成未披露被拦下",
+    result.status === 1 && result.output.includes("未披露"),
+    result.output.trim(),
+  );
+}
+{
+  const file = writeTemp("tool-gap-undisclosed.json", (state) => {
+    state.gaps.push({
+      id: "G3",
+      question: "DCF 折现率/终值增长率未披露",
+      impact: "无法复核 DCF",
+      evidence_needed: "修复读取",
+      kind: "tool",
+      status: "open",
+    });
+  });
+  const result = validate(file);
+  check(
+    "工具类缺口写成未披露被拦下",
+    result.status === 1 && result.output.includes("不是来源缺失"),
+    result.output.trim(),
+  );
+}
+{
+  const file = writeTemp("tool-failure-ok.json", (state) => {
+    state.model.checks.push({
+      id: "CHK3",
+      item: "DCF 参数读取失败，待修复",
+      result: "unverified",
+      reason: "tool_failure",
+      locator: "DCF!C48:C49",
+      attempted: "workbook_query",
+      gap_ids: ["G3"],
+      note: "解析报错",
+    });
+    state.gaps.push({
+      id: "G3",
+      question: "DCF 参数读取失败",
+      impact: "无法复核 DCF",
+      evidence_needed: "修复读取",
+      kind: "tool",
+      status: "open",
+    });
+  });
+  const result = validate(file);
+  check("tool_failure 挂 tool gap 可通过", result.status === 0, result.output.trim());
+}
+
 console.log("跟踪结果归一化");
 {
   const context = {

@@ -33,9 +33,12 @@
 
 ### 估值 V
 
-- 假设变化 → 重算受影响情景；方法变化需单独说明理由。
+- 假设变化 → 重算受影响情景，写 `changes.kind = "assumption_update"`；`attribution` 覆盖所有变化的驱动，`combination` / `residual` 闭合。只写一个驱动、残差很大，会被校验器拦。
+- 方法变化不是“目标价更新”：新建 V；旧 V 保留原值并标 `superseded`，写 `changes.kind = "method_switch"` + `comparability = "not_comparable"` + `bridge`，**不写 attribution**。报告不能把两个方法写成 `A → B` 的序列。
+- 归因只能引用该 V 的 `drivers`；不进入公式的 A（如 ARR 倍数法里的利润率）不能作为估值变化原因。
 - 只更新价格不算估值更新；`market.price` 与 `V.value` 分开。
 - 多方法并列时逐个更新，不合成加权目标价。
+- 同一 `data_cutoff` 内不得对同一 V 反向修正；确需修正时要写 `stability_note`，并引用新增的非推断证据。
 
 ### 观点 T
 
@@ -52,7 +55,7 @@
 ## revision 与 changes
 
 - `revision` 只在有实质变化时 +1，且必须与 `changes` 条目一一对应。
-- `changes` 每条：`id, at, revision, affected_ids, before, after, reason, evidence_ids, run_id`。
+- `changes` 每条：`id, at, revision, affected_ids, before, after, reason, evidence_ids, run_id`；2.1 另加 `kind`、`from_valuation_id`、`to_valuation_id`、`comparability`、`value_before`、`value_after`。方法切换加 `bridge`；同方法改动加 `attribution`、`combination`、`residual`。
 - `affected_ids` 指向真正被改的对象，不要把所有 ID 都列上。
 - 首次版本没有 changes；跟踪第一次运行如果只是建基线，用 `no_change`，不升 revision。
 
@@ -82,5 +85,8 @@
 - [ ] 每条 `armed` F 都有 `last_observed` 或 `unknown` 说明。
 - [ ] 结果 JSON 的 `theses` 覆盖全部观点。
 - [ ] `changes` 与 `revision` 一致。
-- [ ] 报告与状态没有互相矛盾的数字。
+- [ ] 方法切换有 `kind=method_switch`、`not_comparable`、`bridge`，旧 V 标 `superseded`，没有 attribution。
+- [ ] 同方法改动的 `attribution` 覆盖所有变化驱动，残差有说明；没有把不进入公式的 A 列为原因。
+- [ ] 估值变化至少有 1 条非 `inference` 证据；同日反向修正有 `stability_note`。
+- [ ] 报告与状态没有互相矛盾的数字，也没有跨方法的目标价箭头。
 - [ ] 未验证项写进了 `notUsed` 或 `writeback.note`。

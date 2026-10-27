@@ -79,8 +79,11 @@ description: 跟踪运行专用。读取 analysis-state.json 与投资框架报�
 ```
 
 - 修改假设时保留原 `assumption_id`，在 `changes` 里写 before/after。
-- 敏感性只在输入变化时重算；重算要说明基准、扰动、固定条件。
+- 敏感性只在输入变化时重算；重算要说明基准、扰动、固定条件；不进入该 V `drivers` 的假设，不能写成该 V 的估值敏感性。
 - 估值只在假设或方法变化时改；价格变动本身不改估值模型，只更新 `market`。
+- **同方法改驱动**：`changes.kind = "assumption_update"`，`attribution` 覆盖所有变化的驱动，`combination` / `residual` 要闭合。只写一个驱动、残差很大，会被校验器拦。
+- **方法切换**（如 DCF → ARR 倍数法）：不是改一个数字。新建 V；旧 V 保留原值并标 `superseded`、`changes.kind = "method_switch"`、`comparability = "not_comparable"`、写 `bridge`、**不写 attribution**；报告不能写成目标价序列。
+- 归因里出现不在 `V.drivers` 的 A（如 ARR 倍数法里的利润率 A3）是错误：它不进入公式，只能解释观点。
 - 观点措辞变化不算实质变化，不改状态、不写 changes。
 - 新增观点用新 ID；删除用 `retired`，不物理删。
 
@@ -114,16 +117,16 @@ node <investment-framework skill 目录>/scripts/validate_state.mjs analysis-sta
 
 只改受影响的小节，保留未受影响的判断、ID 和写作结构：
 
-- 第 2 节：结论/目标价区间变了才改；
+- 第 2 节：结论/目标价/估值方法或可比性变了才改；
 - 第 4 节：观点状态、证据、置信度变了才改；
-- 第 5 节：估值或敏感性重算后才改；
+- 第 5 节：估值/敏感性重算、或方法切换后才改；方法切换要并列新旧 + bridge，不写成目标价箭头；
 - 第 6 节：失效条件的观察值、状态、触发情况；
 - 第 7 节：证据、缺口、版本变化。
 
 末尾 `## 跟踪记录` **只追加**一行：
 
 ```
-- 2026-10-20 ｜数据截止 2026-10-18｜T1 维持、T2 降为 weakened｜触发 F2｜目标价 92 → 88
+- 2026-10-20 ｜数据截止 2026-10-18｜T1 维持、T2 降为 weakened｜触发 F2｜目标价（同方法）92 → 88
 ```
 
 没有实质变化也要追加，写“本期无变化”。
@@ -158,6 +161,8 @@ node <investment-framework skill 目录>/scripts/validate_state.mjs analysis-sta
 - 不因股价涨跌改经营判断；价格只进 `market` 和回报路径。
 - 不把新实际倒灌成原模型输入；原预测保留，另记 `actual`。
 - 证据冲突时保留双方，写清取舍理由，不静默选一个。
+- 同一数据截止日内不得对同一估值做反向修正；确需修正时写 `stability_note`，并引用新增的非推断证据。只凭“人工判断偏高/偏低”或现价距离改 base，标 `needs_review`，不升 revision。
+- 工具失败（读取报错、超时、图片/公式损坏）记 `tool_failure` + `gap_ids`，不要写成“未披露”，也不要在未修复时把替代口径永久留下。
 - 没有新数据时输出 `no_change`；普通跟踪要追加跟踪记录，监测模式**不要**追加。
 
 ## 边界

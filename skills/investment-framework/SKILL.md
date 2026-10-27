@@ -29,14 +29,16 @@ description: 从既有估值模型或研究材料形成七节投资框架，并�
 | 节 | 必须回答 | 主要引用 |
 |---|---|---|
 | 1 研究设定 | 对象、问题、期限、截止日、币种单位、模型版本 | `subject` |
-| 2 当前判断 | 值不值得研究、目标价区间、最大不确定性、相比上版的变化 | `valuations`、`changes` |
+| 2 当前判断 | 值不值得研究、目标价区间、估值方法与可比性、最大不确定性、相比上版的变化 | `valuations`、`changes` |
 | 3 模型与经营驱动 | 原模型怎么算、真正输入、驱动链、核对结果 | `model.understanding`、`model.checks`、`A` |
 | 4 观点台账 | 每条观点的主张、机制、依赖假设、正反证据、替代解释、置信度 | `T` |
-| 5 估值、敏感性与回报 | 三情景、敏感性类别与传播、市场对照、回报路径 | `V`、`S`、`market` |
+| 5 估值、敏感性与回报 | 三情景、方法/倍数口径、敏感性类别与传播、市场对照与 bridge、回报路径 | `V`、`S`、`market` |
 | 6 失效条件与监控 | 每条的指标、阈值、来源、频率、触发后动作 | `F` |
 | 7 证据、缺口与版本变化 | 证据质量、未解决问题、本次改了什么 | `E`、`G`、`C`、`review` |
 
 详细写法见 [报告模板](references/report-template.md)。报告是文件，可以用表格；聊天回复里给结论摘要即可。
+
+状态文件新建或实质更新用 `schema_version: "2.1"`；`2.0` 只读兼容，不重写历史文件。2.1 的关键不是多几个字段，而是把“方法、口径、驱动、可比性”写成结构化事实，避免把不同模型的目标价接成一条序列。
 
 ## 执行顺序
 
@@ -46,9 +48,23 @@ description: 从既有估值模型或研究材料形成七节投资框架，并�
 
 把结论写进 `model.understanding` 四段，核对项写进 `model.checks`（`pass` / `difference` / `plug` / `unverified`）。没有模型时留空并说明，不要编造 Excel 来源。
 
+**工具失败不是来源事实。** workbook 读取报错、超时、图片/公式损坏（例如内嵌 WMF/EMF 触发 `ZeroDivisionError`）导致整本表读不到时：
+
+- 记 `result: "unverified"`、`reason: "tool_failure"`，写 `locator`（实际检查的 sheet/单元格）、`attempted`（试过的读取路径）和 `gap_ids`；
+- 把缺口写进 `gaps`，`kind: "tool"`、`status: "open"`；
+- **不要**在 `item` / `note` 里写“未披露”。只有成功读取到空值或硬编码，才能记 `not_disclosed`。
+- 修复读取路径后要回到原模型复核；模型有 DCF 表且参数可读时，不得以“未披露”为由永久放弃 DCF。
+
 ### 2. 建假设台账
 
 只保留**观点会用到**的假设，每条一个 `A` ID，写清期间、值/单位、`kind`、证据。模型没写选值理由就记“模型未记录理由”，不要替分析师编动机。
+
+假设分两类，别混：
+
+- **公式驱动**：直接进入某个 `V.drivers` 的操作数（ARR、倍数、EPS、汇率、股数、折现率、终值增长率、净现金等）。公式里每个数都要有 A，汇率和股数也不例外。
+- **叙述/观点依赖**：支撑观点但不直接进入估值公式。
+
+不进入公式的假设可以写进观点、风险、第 4 节，**不能**写进目标价变化的归因。
 
 ### 3. 立观点（3–5 条，按问题定）
 
@@ -74,10 +90,29 @@ description: 从既有估值模型或研究材料形成七节投资框架，并�
 - 区分 `model_input`（经营输入扰动）与 `price_condition`（给定 EPS×倍数的价格对照），后者不能冒充前者。
 - 区间按历史波动、经营约束或模型临界值定，不默认 ±10%；百分比与百分点分开。
 - 只测了部分路径就说明范围，不宣称“全表已测试”。
+- 只扰动进入公式的输入；不进入某个 V 的 `drivers` 的假设，只能做观点/情景说明，不能写成该 V 的估值敏感性。
 
 ### 5. 估值与市场对照
 
-每条 `V` 一个情景（`bear` / `base` / `bull` / `reverse`），写清方法、估值日、公式、依赖假设、证据与限制。多方法并列时不合成一个加权目标价。
+每条 `V` 一个情景（`bear` / `base` / `bull` / `reverse`），先声明口径，再写公式：
+
+- `method_key`：稳定机器键，同一模型、同一输出口径、同一倍数口径才复用；换模型或换口径就是新 key。
+- `output`：`target_price` / `equity_value` / `enterprise_value` / `per_share_value`。
+- `drivers`：只列公式直接操作数，每项都要有 `assumption_id`；`assumption_ids` 再补间接依赖。
+- 有 `multiple` 驱动时必须写 `multiple_basis` + `multiple_period`，如 `11x 2026E ARR`。10x 是输入，458 是输出；不要把 `10x → 11x` 写成“目标价 +10%”，也不要把 ARR 倍数简称“PE”。
+- `status` / `superseded_by`：`current` 或 `superseded`。多方法并列时不合成加权目标价；报告写清哪个是基准、哪个是对照、为什么。
+
+**方法切换（硬规则）**：DCF → ARR 倍数法这类变化不是“目标价更新”，不能把两个值写成 `1560 → 320`。按下面做：
+
+1. 旧 V 保留原值和原 `method_key`，标 `status: "superseded"`，`superseded_by` 指向新 V；
+2. 新 V 用新 ID、新 `method_key`；
+3. `changes` 写 `kind: "method_switch"`、`comparability: "not_comparable"`、`from/to`、`comparability_reason` 和 `bridge`（至少列方法、基准指标、倍数口径）；
+4. **不写 `attribution`**。两个不同模型之间没有可加/可乘的“贡献”；
+5. 报告第 5 节并列两种方法 + bridge，不写成连续目标价。
+
+**同方法改假设**：写 `kind: "assumption_update"`。`attribution` 要覆盖所有变化的驱动，`combination` / `residual` 说明闭合；`320 → 458` 必须同时写 ARR `20 → 26` 和倍数 `10 → 11`，只写倍数会让残差暴露。归因里出现不在 `V.drivers` 的 A（例如 ARR 倍数法里的利润率 A3）是错误，不是“辅助解释”。
+
+**稳定性**：同一 `data_cutoff` 内不得对同一 V 做反向修正；确需修正时写 `stability_note`，并引用新增的非推断证据。只凭“人工判断偏高/偏低”或现价距离调 base，不升 revision，标 `needs_review`。
 
 `market` 记录价格、价格日、共识与来源、现价隐含条件。没有行情就留 `null` 并写缺口，不用模型缓存价充当实时价。
 
@@ -103,9 +138,10 @@ description: 从既有估值模型或研究材料形成七节投资框架，并�
 2. 校验：
    - 会话有 bash 时：`node <本 skill 目录>/scripts/validate_state.mjs <analysis-state.json>`（技能加载时会给出目录）；
    - 没有 bash 时：按 [状态契约](references/state-contract.md) 的自查清单逐项核对，并在第 7 节写“脚本校验未执行”。
-3. 修掉所有 error；warning 可以保留但要理解。
-4. `stage` 设为 `draft` 或 `reviewed`。`reviewed` 要求每个 active 观点都有失效条件和反证。
-5. 回复给结论摘要 + 两个路径（报告、状态），不要逐字贴报告。
+3. 修掉所有 error；warning 可以保留但要理解。校验器会检查方法身份、驱动引用、归因闭合、可比性、证据类型和同日反向修正的稳定性，具体规则见 [状态契约](references/state-contract.md)。
+4. 人工再查三件事：**最大驱动是否在 `attribution` 里？有没有把不进入公式的 A 写成目标价变化原因？报告有没有把不同方法写成一条目标价序列？**
+5. `stage` 设为 `draft` 或 `reviewed`。`reviewed` 要求每个 active 观点都有失效条件和反证。
+6. 回复给结论摘要 + 两个路径（报告、状态），不要逐字贴报告。
 
 ## 补建状态（已有报告但没有 analysis-state.json）
 

@@ -1,5 +1,5 @@
 {
-  "schema_version": "2.0",
+  "schema_version": "2.1",
   "framework_id": "IF-EXAMPLE-MEMORY",
   "revision": 1,
   "stage": "reviewed",
@@ -88,7 +88,7 @@
         "SRC2"
       ],
       "statement": "渠道 DRAM 库存 9.2 周，连续两个月上升。",
-      "kind": "external",
+      "kind": "actual",
       "period": "2026-09",
       "locator": "月报第 3 页",
       "limitations": "样本为渠道，不含原厂"
@@ -136,6 +136,17 @@
       "period": "2027E",
       "locator": "汇总表第 2 行",
       "limitations": "仅 3 家，发布时间不一"
+    },
+    {
+      "id": "E7",
+      "source_ids": [
+        "SRC2"
+      ],
+      "statement": "渠道库存连续两个月上升，推断 DRAM 价格周期可能在 2027 年后见顶。",
+      "kind": "inference",
+      "period": "2026-09",
+      "locator": "月报第 3 页",
+      "limitations": "由库存数据推断，未获供需平衡表验证"
     }
   ],
   "assumptions": [
@@ -176,6 +187,98 @@
         "E1"
       ],
       "operating_conditions": "单价上行覆盖单位成本上升",
+      "status": "active"
+    },
+    {
+      "id": "A4",
+      "statement": "2027E 稀释 EPS 5.2 元（模型输出）",
+      "value": 5.2,
+      "unit": "元/股",
+      "period": "2027E",
+      "kind": "model_forecast",
+      "evidence_ids": [
+        "E1",
+        "E6"
+      ],
+      "operating_conditions": "ASP、产能、毛利率按模型路径",
+      "status": "active"
+    },
+    {
+      "id": "A5",
+      "statement": "目标 PE 18x",
+      "value": 18,
+      "unit": "倍",
+      "period": "2027E",
+      "kind": "model_input",
+      "evidence_ids": [
+        "E6"
+      ],
+      "operating_conditions": "可比公司估值不继续下移",
+      "status": "active"
+    },
+    {
+      "id": "A6",
+      "statement": "折现率 12%（12 个月）",
+      "value": 0.12,
+      "unit": "比例",
+      "period": "2027E",
+      "kind": "model_input",
+      "evidence_ids": [
+        "E1"
+      ],
+      "operating_conditions": "无风险利率与风险溢价维持",
+      "status": "active"
+    },
+    {
+      "id": "A7",
+      "statement": "bear 情景 2027E EPS 4.3 元",
+      "value": 4.3,
+      "unit": "元/股",
+      "period": "2027E",
+      "kind": "research_forecast",
+      "evidence_ids": [
+        "E2"
+      ],
+      "operating_conditions": "库存回升、价格周期提前转弱",
+      "status": "active"
+    },
+    {
+      "id": "A8",
+      "statement": "bear 情景目标 PE 14x",
+      "value": 14,
+      "unit": "倍",
+      "period": "2027E",
+      "kind": "research_forecast",
+      "evidence_ids": [
+        "E2"
+      ],
+      "operating_conditions": "周期下行时估值中枢下移",
+      "status": "active"
+    },
+    {
+      "id": "A9",
+      "statement": "bull 情景 2027E EPS 6.0 元",
+      "value": 6.0,
+      "unit": "元/股",
+      "period": "2027E",
+      "kind": "research_forecast",
+      "evidence_ids": [
+        "E3"
+      ],
+      "operating_conditions": "ASP 涨幅与产能爬坡均超预期",
+      "status": "active"
+    },
+    {
+      "id": "A10",
+      "statement": "bull 情景目标 PE 20x",
+      "value": 20,
+      "unit": "倍",
+      "period": "2027E",
+      "kind": "research_forecast",
+      "evidence_ids": [
+        "E3"
+      ],
+      "operating_conditions": "景气上行时估值中枢上移",
       "status": "active"
     }
   ],
@@ -264,10 +367,10 @@
     {
       "id": "S3",
       "assumption_ids": [
-        "A1"
+        "A5"
       ],
       "method": "price_condition",
-      "baseline": "2027E EPS 5.2 元、PE 18x",
+      "baseline": "2027E EPS 5.2 元、目标 PE 18x",
       "perturbation": "PE 15x / 20x",
       "result": "15x → 78 元；20x → 104 元",
       "affects": [
@@ -277,21 +380,48 @@
         "E6"
       ],
       "fixed_conditions": "EPS 固定为 5.2 元",
-      "limitations": "价格条件对照，不解释经营假设如何产生 EPS"
+      "limitations": "价格条件对照，只改目标 PE，不解释经营假设如何产生 EPS"
     }
   ],
   "valuations": [
     {
       "id": "V1",
       "scenario": "base",
-      "method": "PE",
+      "method_key": "pe_forward_discounted",
+      "method": "远期 PE 折现",
+      "output": "target_price",
+      "multiple_basis": "EPS",
+      "multiple_period": "2027E",
       "as_of": "2026-09-01",
       "value": 92,
       "unit": "元/股",
+      "drivers": [
+        {
+          "assumption_id": "A4",
+          "role": "base_metric",
+          "value": 5.2,
+          "unit": "元/股"
+        },
+        {
+          "assumption_id": "A5",
+          "role": "multiple",
+          "value": 18,
+          "unit": "倍"
+        },
+        {
+          "assumption_id": "A6",
+          "role": "discount_rate",
+          "value": 0.12,
+          "unit": "比例"
+        }
+      ],
       "assumption_ids": [
         "A1",
         "A2",
-        "A3"
+        "A3",
+        "A4",
+        "A5",
+        "A6"
       ],
       "thesis_ids": [
         "T1",
@@ -302,18 +432,48 @@
         "E4"
       ],
       "formula": "2027E EPS 5.2 元 × 目标 PE 18x，按 12% 折现 12 个月",
-      "limitations": "目标 PE 为模型直接设定，未做同业分位验证"
+      "limitations": "目标 PE 为模型直接设定，未做同业分位验证",
+      "status": "current",
+      "superseded_by": null
     },
     {
       "id": "V2",
       "scenario": "bear",
-      "method": "PE",
+      "method_key": "pe_forward_discounted",
+      "method": "远期 PE 折现（bear）",
+      "output": "target_price",
+      "multiple_basis": "EPS",
+      "multiple_period": "2027E",
       "as_of": "2026-09-01",
       "value": 65,
       "unit": "元/股",
+      "drivers": [
+        {
+          "assumption_id": "A7",
+          "role": "base_metric",
+          "value": 4.3,
+          "unit": "元/股"
+        },
+        {
+          "assumption_id": "A8",
+          "role": "multiple",
+          "value": 14,
+          "unit": "倍"
+        },
+        {
+          "assumption_id": "A6",
+          "role": "discount_rate",
+          "value": 0.12,
+          "unit": "比例"
+        }
+      ],
       "assumption_ids": [
         "A1",
-        "A3"
+        "A2",
+        "A3",
+        "A7",
+        "A8",
+        "A6"
       ],
       "thesis_ids": [
         "T1"
@@ -323,19 +483,48 @@
         "E2"
       ],
       "formula": "ASP +10%、毛利率 38%、PE 14x",
-      "limitations": "压力情景，不是价值底线"
+      "limitations": "压力情景，不是价值底线",
+      "status": "current",
+      "superseded_by": null
     },
     {
       "id": "V3",
       "scenario": "bull",
-      "method": "PE",
+      "method_key": "pe_forward_discounted",
+      "method": "远期 PE 折现（bull）",
+      "output": "target_price",
+      "multiple_basis": "EPS",
+      "multiple_period": "2027E",
       "as_of": "2026-09-01",
       "value": 120,
       "unit": "元/股",
+      "drivers": [
+        {
+          "assumption_id": "A9",
+          "role": "base_metric",
+          "value": 6.0,
+          "unit": "元/股"
+        },
+        {
+          "assumption_id": "A10",
+          "role": "multiple",
+          "value": 20,
+          "unit": "倍"
+        },
+        {
+          "assumption_id": "A6",
+          "role": "discount_rate",
+          "value": 0.12,
+          "unit": "比例"
+        }
+      ],
       "assumption_ids": [
         "A1",
         "A2",
-        "A3"
+        "A3",
+        "A9",
+        "A10",
+        "A6"
       ],
       "thesis_ids": [
         "T1",
@@ -347,7 +536,9 @@
         "E5"
       ],
       "formula": "ASP +45%、产能 340kwpm、PE 20x",
-      "limitations": "假设 HBM 认证顺利，未有直接证据"
+      "limitations": "假设 HBM 认证顺利，未有直接证据",
+      "status": "current",
+      "superseded_by": null
     }
   ],
   "market": {
