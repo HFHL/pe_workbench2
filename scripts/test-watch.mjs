@@ -15,6 +15,7 @@ import { openStore } from "../store.mjs";
 import {
   buildWatchBrief,
   briefHighlights,
+  companyAliases,
   validateWatchBrief,
 } from "../lib/watch/brief.mjs";
 import {
@@ -24,9 +25,13 @@ import {
   validateFinding,
 } from "../lib/watch/contract.mjs";
 import {
+  buildPrimaryWebQuery,
+  buildSourceTasks,
   candidateHash,
   candidatesFromAnySearch,
+  candidatesFromDeepSeek,
   candidatesFromWestock,
+  isPrimaryWebDomain,
   parseAnySearchResults,
   parseMarkdownTable,
   rankCandidates,
@@ -145,6 +150,53 @@ console.log("brief 抽取");
   check("失效边界非空", brief.invalidation.boundaries.length >= 3);
   check("brief 校验通过", validateWatchBrief(brief).length === 0, validateWatchBrief(brief).join("; "));
   check("状态条 highlights", briefHighlights(brief).length >= 2);
+
+  // Primary web sources: Bloomberg / Reuters are searched first, by English alias.
+  check("解析公司别名", brief.target.aliases.includes("CXMT") && brief.target.aliases.includes("688825.SH"),
+    JSON.stringify(brief.target.aliases));
+  check("剥离“原/现”前缀",
+    companyAliases("长鑫科技（原长鑫存储，CXMT，688825.SH）").includes("长鑫存储"),
+    JSON.stringify(companyAliases("长鑫科技（原长鑫存储，CXMT，688825.SH）")));
+  const primaryQuery = buildPrimaryWebQuery(brief);
+  check("主来源检索词带 site 限定",
+    primaryQuery.includes("site:bloomberg.com") && primaryQuery.includes("site:reuters.com"),
+    primaryQuery);
+  check("主来源检索词用英文别名", primaryQuery.includes("CXMT") && !primaryQuery.includes("688825.SH"),
+    primaryQuery);
+  check("无括号时别名回退为空", companyAliases("贵州茅台").length === 0, JSON.stringify(companyAliases("贵州茅台")));
+  check("主域名判定", isPrimaryWebDomain("www.bloomberg.com") && isPrimaryWebDomain("reuters.com")
+    && !isPrimaryWebDomain("bloomberg.com.evil.test"));
+
+  const tasks = buildSourceTasks(brief, { after: "2026-10-23T09:00:00.000Z", deepseek: true });
+  const deepseekTask = tasks.find((task) => task.adapter === "deepseek-search");
+  const primaryTask = tasks.find((task) => task.adapter === "anysearch-primary");
+  check("扫描任务首选 DeepSeek", Boolean(deepseekTask), JSON.stringify(tasks.map((task) => task.adapter)));
+  check("DeepSeek 任务带 after 时间窗", deepseekTask?.query.includes("after:2026-10-23"), deepseekTask?.query);
+  check("主来源任务限定两个域名", deepseekTask?.domains?.length === 2 && deepseekTask?.sourceTier === 2);
+  check("AnySearch 主来源标记为兜底", primaryTask?.fallback === true && !primaryTask?.query.includes("after:"),
+    JSON.stringify(primaryTask));
+  check("DeepSeek 排在兜底和通用搜索前",
+    tasks.findIndex((task) => task.adapter === "deepseek-search")
+      < tasks.findIndex((task) => task.adapter === "anysearch-primary")
+      && tasks.findIndex((task) => task.adapter === "anysearch-primary")
+      < tasks.findIndex((task) => task.adapter === "anysearch"));
+  const legacyTasks = buildSourceTasks(brief, { deepseek: false });
+  check("DeepSeek 关闭时不出现兜底标记",
+    !legacyTasks.some((task) => task.adapter === "deepseek-search")
+      && legacyTasks.some((task) => task.adapter === "anysearch-primary" && !task.fallback));
+
+  const longBrief = {
+    ...brief,
+    target: {
+      ...brief.target,
+      aliases: ["A".repeat(60), "B".repeat(60), "C".repeat(60)],
+    },
+  };
+  const longTask = buildSourceTasks(longBrief, { after: "2026-10-23", deepseek: true })
+    .find((task) => task.adapter === "deepseek-search");
+  check("DeepSeek 检索词不超过 128 字符且保留 after",
+    longTask.query.length <= 128 && longTask.query.includes("after:2026-10-23"),
+    `${longTask.query.length}: ${longTask.query}`);
 }
 
 console.log("finding 契约");
@@ -199,6 +251,20 @@ console.log("来源解析与排序");
 摘要：一般评论`;
   const anyRows = parseAnySearchResults(anyText);
   check("解析 AnySearch", anyRows.length === 2 && anyRows[0].url === "https://example.com/b");
+  const datedRows = parseAnySearchResults(`## 1. CXMT profit
+来源：https://www.bloomberg.com/news/a
+摘要：profit surge
+date: Oct 13, 2026`);
+  check("解析 AnySearch 发布日期", datedRows[0]?.publishedAt === "2026-10-13", datedRows[0]?.publishedAt);
+  const dupRows = parseAnySearchResults(`## 1. CXMT profit
+来源：https://www.bloomberg.com/news/a
+摘要：profit surge
+## 1. CXMT profit
+
+**URL**: https://www.bloomberg.com/news/a
+profit surge body date: Oct 13, 2026`);
+  check("合并摘要块与正文块", dupRows.length === 1 && dupRows[0].publishedAt === "2026-10-13"
+    && dupRows[0].url.includes("bloomberg.com"), JSON.stringify(dupRows));
   const candidates = [...westock, ...candidatesFromAnySearch(anyRows)];
   const ranked = rankCandidates(candidates, { queries: { topics: ["毛利率"] } });
   check("财报/公告排在评论前", ranked[0].title.includes("三季报"), JSON.stringify(ranked.map((item) => [item.title, item.score])));
@@ -213,6 +279,96 @@ console.log("来源解析与排序");
   check("无关新闻被过滤", unrelated.length === 0);
   const industry = rankCandidates([{ adapter: "anysearch", title: "DRAM 合约价连续两季环比转负", url: "https://example.com/y", snippet: "" }], context);
   check("行业新闻保留", industry.length === 1);
+
+  // Bloomberg / Reuters: alias-only English headline must survive the relevance
+  // filter, and a primary-domain link must outrank the same story on a repost.
+  const primaryContext = {
+    target: { company: "长鑫科技（CXMT，688825.SH）", aliases: ["CXMT", "长鑫存储"], security: "688825.SH" },
+    queries: { topics: ["毛利率"] },
+  };
+  const english = rankCandidates([{
+    adapter: "anysearch-primary",
+    title: "China's CXMT Swings to Profit After Memory Chip Prices Surge",
+    url: "https://www.bloomberg.com/news/articles/2026-10-16/cxmt-profit",
+    snippet: "",
+    sourceTier: 2,
+  }], primaryContext);
+  check("英文标题按别名保留", english.length === 1 && english[0].primary === true, JSON.stringify(english));
+  const repost = rankCandidates([{
+    adapter: "anysearch",
+    title: "China's CXMT Swings to Profit After Memory Chip Prices Surge",
+    url: "https://www.facebook.com/repost",
+    snippet: "",
+  }], primaryContext);
+  check("主来源分数更高", Boolean(english[0] && repost[0] && english[0].score > repost[0].score),
+    `${english[0]?.score} vs ${repost[0]?.score}`);
+
+  const mixed = [
+    { title: "CXMT profit", url: "https://www.bloomberg.com/news/a" },
+    { title: "CXMT repost", url: "https://www.facebook.com/x" },
+    { title: "CXMT wire", url: "https://www.reuters.com/world/b" },
+  ];
+  const filtered = candidatesFromAnySearch(mixed, {
+    domains: ["bloomberg.com", "reuters.com"],
+    sourceTier: 2,
+    adapter: "anysearch-primary",
+  });
+  check("主来源结果按域名过滤", filtered.length === 2 && filtered.every((item) => item.sourceTier === 2),
+    JSON.stringify(filtered.map((item) => item.domain)));
+  check("主来源与通用搜索共享 hash",
+    candidateHash({ adapter: "anysearch-primary", title: "a", url: "b" })
+      === candidateHash({ adapter: "anysearch", title: "a", url: "b" }));
+  check("DeepSeek 与兜底共享 hash",
+    candidateHash({ adapter: "deepseek-search", title: "a", url: "b" })
+      === candidateHash({ adapter: "anysearch-primary", title: "a", url: "b" }));
+
+  // DeepSeek results: structured date/rerank, strict domain filter.
+  const deepseekRows = [
+    {
+      title: "China's CXMT Swings to Profit After Memory Chip Prices Surge",
+      url: "https://www.bloomberg.com/news/articles/2026-10-16/cxmt-profit",
+      summary: "CXMT turned profitable as memory prices surged.",
+      date: "2026-10-15T16:00:00+00:00",
+      authority: 4,
+      rerankScore: 2.4,
+      siteName: "Bloomberg.com",
+    },
+    {
+      title: "CXMT profit repost",
+      url: "https://www.facebook.com/repost",
+      summary: "same story, reposted",
+      date: "2026-10-15T16:00:00+00:00",
+      authority: 1,
+      rerankScore: 0.5,
+    },
+  ];
+  const deepseekCandidates = candidatesFromDeepSeek(deepseekRows, {
+    domains: ["bloomberg.com", "reuters.com"],
+    sourceTier: 2,
+  });
+  check("DeepSeek 结果按域名过滤", deepseekCandidates.length === 1
+    && deepseekCandidates[0].domain === "www.bloomberg.com", JSON.stringify(deepseekCandidates));
+  check("DeepSeek 日期转为本地日期",
+    ["2026-10-15", "2026-10-16"].includes(deepseekCandidates[0]?.publishedAt),
+    deepseekCandidates[0]?.publishedAt);
+  check("DeepSeek 用 summary 作摘要", deepseekCandidates[0]?.snippet.includes("turned profitable"));
+  check("DeepSeek 保留 rerank/authority",
+    deepseekCandidates[0]?.rerankScore === 2.4 && deepseekCandidates[0]?.authority === 4);
+  const reranked = rankCandidates([{
+    adapter: "deepseek-search",
+    title: "CXMT profit",
+    url: "https://www.bloomberg.com/news/a",
+    rerankScore: 3,
+    sourceTier: 2,
+  }], primaryContext)[0];
+  const plain = rankCandidates([{
+    adapter: "deepseek-search",
+    title: "CXMT profit",
+    url: "https://www.bloomberg.com/news/a",
+    rerankScore: 0,
+    sourceTier: 2,
+  }], primaryContext)[0];
+  check("DeepSeek 相关度参与排序", reranked.score - plain.score === 6, `${reranked.score} vs ${plain.score}`);
 }
 
 console.log("深度复核时间");
@@ -321,14 +477,61 @@ console.log("service 端到端（stub session / stub tools）");
     anysearch: `## 1. 长鑫科技三季报毛利率
 来源：https://example.com/b
 摘要：毛利率 57%，低于 60% 阈值`,
+    primary: `## 1. China's CXMT Swings to Profit After Memory Chip Prices Surge
+来源：https://www.bloomberg.com/news/articles/2026-10-16/cxmt-profit
+摘要：CXMT turned profitable as memory prices surged
+## 2. CXMT profit repost
+来源：https://www.facebook.com/repost/1
+摘要：same story, reposted`,
   };
+  let deepseekMode = "ok";
   ctx.tools = [
     { name: "westock_query", execute: async () => ({ content: [{ type: "text", text: toolText.westock }] }) },
-    { name: "anysearch_search", execute: async () => ({ content: [{ type: "text", text: toolText.anysearch }] }) },
+    {
+      name: "deepseek_search",
+      execute: async () => {
+        if (deepseekMode === "empty") {
+          return { content: [{ type: "text", text: "DeepSeek 搜索没有返回匹配结果。" }], details: { results: [] } };
+        }
+        return {
+          content: [{ type: "text", text: "## 1. China's CXMT Swings to Profit\n来源：https://www.bloomberg.com/news/articles/2026-10-16/cxmt-profit" }],
+          details: {
+            results: [
+              {
+                title: "China's CXMT Swings to Profit After Memory Chip Prices Surge",
+                url: "https://www.bloomberg.com/news/articles/2026-10-16/cxmt-profit",
+                summary: "CXMT turned profitable as memory prices surged.",
+                date: "2026-10-15T16:00:00+00:00",
+                authority: 4,
+                rerankScore: 2.4,
+                siteName: "Bloomberg.com",
+              },
+              {
+                title: "CXMT profit repost",
+                url: "https://www.facebook.com/repost/1",
+                summary: "same story, reposted",
+                date: "2026-10-15T16:00:00+00:00",
+                authority: 1,
+                rerankScore: 0.5,
+              },
+            ],
+          },
+        };
+      },
+    },
+    {
+      name: "anysearch_search",
+      execute: async (_id, params) => ({
+        content: [{
+          type: "text",
+          text: String(params?.query || "").includes("site:bloomberg.com") ? toolText.primary : toolText.anysearch,
+        }],
+      }),
+    },
   ];
 
   const service = createWatchService({
-    config: { watchMaxRuntimeMs: 2000, watchAskTimeoutMs: 2000 },
+    config: { watchMaxRuntimeMs: 2000, watchAskTimeoutMs: 2000, deepseekSearch: true },
     bus,
     projectManager,
     sessions,
@@ -350,9 +553,32 @@ console.log("service 端到端（stub session / stub tools）");
   check("候选事件可查", store.listWatchEvents({ watchId: created.watch.id }).length >= 2);
   const scanLogs = store.listWatchLogs({ watchId: created.watch.id, runId: scan.runId });
   check("扫描日志含来源", scanLogs.some((log) => log.kind === "source" && log.payload.ok === true), JSON.stringify(scanLogs.map((log) => log.kind)));
+  check("扫描日志含 DeepSeek 主来源", scanLogs.some((log) => log.kind === "source"
+    && log.payload.adapter === "deepseek-search"
+    && log.payload.primary === true
+    && log.payload.count === 1), JSON.stringify(scanLogs.filter((log) => log.kind === "source").map((log) => log.payload)));
+  check("DeepSeek 命中时不走兜底", scan.fallbackUsed === false
+    && !scanLogs.some((log) => log.kind === "source" && log.payload.fallback === true),
+    JSON.stringify(scan));
+  const scannedEvents = store.listWatchEvents({ watchId: created.watch.id });
+  check("Bloomberg 候选入库", scannedEvents.some((event) => String(event.domain || "").endsWith("bloomberg.com")),
+    JSON.stringify(scannedEvents.map((event) => [event.title, event.domain])));
+  check("主来源候选不入库 Facebook",
+    !scannedEvents.some((event) => String(event.domain || "").includes("facebook") && event.adapter === "anysearch-primary"),
+    JSON.stringify(scannedEvents.map((event) => [event.title, event.domain])));
   check("扫描日志含候选", scanLogs.some((log) => log.kind === "candidate" && log.payload.title), JSON.stringify(scanLogs.map((log) => log.kind)));
   check("扫描日志含结束", scanLogs.some((log) => log.kind === "run_end" && log.payload.status === "watching"));
   check("日志裁剪可用", store.pruneWatchLogs(created.watch.id, 200) >= 0);
+
+  // Fallback path: DeepSeek returns zero in-domain hits -> AnySearch takes over.
+  deepseekMode = "empty";
+  const fallbackScan = await service.scan(ctx, created.watch.id);
+  check("DeepSeek 无结果时启用 AnySearch 兜底", fallbackScan.fallbackUsed === true, JSON.stringify(fallbackScan));
+  const fallbackLogs = store.listWatchLogs({ watchId: created.watch.id, runId: fallbackScan.runId });
+  check("兜底来源写入审计日志", fallbackLogs.some((log) => log.kind === "source"
+    && log.payload.adapter === "anysearch-primary"
+    && log.payload.fallback === true));
+  deepseekMode = "ok";
 
   const result = await service.runCheck(ctx, created.watch.id, { trigger: "scan", force: true });
   check("LLM 研判产出 finding", result.material === true && Boolean(result.message?.id), JSON.stringify(result));

@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 
 export async function handleProjects({ req, res, url, app, ctx }) {
   const { json, readJson } = app.http;
-  const { defaultStore, projectManager, ensureProjectDirs, PROJECTS_DIR, MODEL_ID, DEFAULT_PROJECT_ID, ASR_ENABLED, ASR_API_KEY, ASR_API_BASE, ANYSEARCH_QUERY, ANYSEARCH_API_KEY, ANYSEARCH_API_BASE, WEB_FETCH, WEB_FETCH_ALLOW_PRIVATE, CALC_INFO, COPILOTKIT_ENABLED } = app;
+  const { defaultStore, projectManager, ensureProjectDirs, PROJECTS_DIR, MODEL_ID, DEFAULT_PROJECT_ID, ASR_ENABLED, ASR_API_KEY, ASR_API_BASE, ANYSEARCH_QUERY, ANYSEARCH_API_KEY, ANYSEARCH_API_BASE, DEEPSEEK_SEARCH, DEEPSEEK_API_BASE, WEB_FETCH, WEB_FETCH_ALLOW_PRIVATE, CALC_INFO, COPILOTKIT_ENABLED } = app;
   const pathname = url.pathname;
   if (pathname === "/api/health" && req.method === "GET") {
     return json(res, 200, {
@@ -32,6 +32,10 @@ export async function handleProjects({ req, res, url, app, ctx }) {
         enabled: ANYSEARCH_QUERY,
         configured: Boolean(ANYSEARCH_API_KEY),
         apiBase: ANYSEARCH_API_BASE,
+      },
+      deepseekSearch: {
+        enabled: Boolean(DEEPSEEK_SEARCH),
+        apiBase: DEEPSEEK_API_BASE,
       },
       webFetch: {
         enabled: WEB_FETCH,

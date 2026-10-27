@@ -27,6 +27,7 @@ import {
   buildSourceTasks,
   candidateHash,
   candidatesFromAnySearch,
+  candidatesFromDeepSeek,
   candidatesFromWestock,
   parseAnySearchResults,
   parseMarkdownTable,
@@ -465,7 +466,7 @@ export function createWatchService({
     const result = await tool.execute(`watch-scan-${Date.now()}`, params);
     const text = (result?.content || []).find((part) => part.type === "text")?.text || "";
     if (result?.isError) throw new Error(text || `${name} 调用失败`);
-    return text;
+    return { text, details: result?.details || {} };
   }
 
   async function scan(ctx, watchId) {
@@ -475,7 +476,10 @@ export function createWatchService({
     const runId = crypto.randomUUID();
     const seq = { value: 0 };
     const startedAt = Date.now();
-    const tasks = buildSourceTasks(watch.brief);
+    const tasks = buildSourceTasks(watch.brief, {
+      after: watch.lastScanAt || "",
+      deepseek: config.deepseekSearch !== false,
+    });
     logRun(ctx, watchId, runId, "scan", seq, "run_start", {
       trigger: "scan",
       intervalMinutes: watch.intervalMinutes,
@@ -497,33 +501,70 @@ export function createWatchService({
 
     const candidates = [];
     const errors = [];
+    let needPrimaryFallback = false;
+    let fallbackUsed = false;
     for (const task of tasks) {
+      if (task.fallback && !needPrimaryFallback) continue;
+      if (task.fallback) fallbackUsed = true;
       const taskStarted = Date.now();
       try {
         let found = [];
-        if (task.adapter === "anysearch") {
-          const text = await callTool(ctx, "anysearch_search", { query: task.query, maxResults: 6 });
-          found = candidatesFromAnySearch(parseAnySearchResults(text), { query: task.query });
+        let rawCount = 0;
+        if (task.adapter === "deepseek-search") {
+          const { details } = await callTool(ctx, "deepseek_search", {
+            query: task.query,
+            count: task.maxResults || 8,
+            needContent: false,
+          });
+          const rows = Array.isArray(details.results) ? details.results : [];
+          rawCount = rows.length;
+          found = candidatesFromDeepSeek(rows, {
+            query: task.query,
+            sourceTier: task.sourceTier ?? 2,
+            adapter: task.adapter,
+            domains: task.domains || null,
+          });
+          if (!found.length) needPrimaryFallback = true;
+        } else if (String(task.adapter).startsWith("anysearch")) {
+          const { text } = await callTool(ctx, "anysearch_search", {
+            query: task.query,
+            maxResults: task.maxResults || 6,
+          });
+          const parsed = parseAnySearchResults(text);
+          rawCount = parsed.length;
+          found = candidatesFromAnySearch(parsed, {
+            query: task.query,
+            sourceTier: task.sourceTier ?? 3,
+            adapter: task.adapter,
+            domains: task.domains || null,
+          });
         } else {
-          const text = await callTool(ctx, "westock_query", { args: task.args });
+          const { text } = await callTool(ctx, "westock_query", { args: task.args });
           found = candidatesFromWestock(parseMarkdownTable(text), { kind: task.kind });
+          rawCount = found.length;
         }
         candidates.push(...found);
         logRun(ctx, watchId, runId, "scan", seq, "source", {
           adapter: task.adapter,
           kind: task.kind || "",
           query: task.query || (task.args || []).join(" "),
+          primary: Boolean(task.domains),
+          fallback: Boolean(task.fallback),
           ok: true,
           count: found.length,
+          rawCount,
           durationMs: Date.now() - taskStarted,
         });
       } catch (error) {
+        if (task.adapter === "deepseek-search") needPrimaryFallback = true;
         errors.push(`${task.adapter}${task.kind ? `/${task.kind}` : ""}: ${error.message}`);
         logger.warn?.(`[watch] source ${task.adapter} failed: ${error.message}`);
         logRun(ctx, watchId, runId, "scan", seq, "source", {
           adapter: task.adapter,
           kind: task.kind || "",
           query: task.query || (task.args || []).join(" "),
+          primary: Boolean(task.domains),
+          fallback: Boolean(task.fallback),
           ok: false,
           count: 0,
           error: error.message,
@@ -580,11 +621,12 @@ export function createWatchService({
       status,
       added,
       candidates: ranked.length,
+      fallbackUsed,
       errors,
       durationMs: Date.now() - startedAt,
     });
     ctx.store.pruneWatchLogs(watchId);
-    return { added, candidates: ranked.length, errors, runId };
+    return { added, candidates: ranked.length, fallbackUsed, errors, runId };
   }
 
   /* ---------- LLM check ---------- */
@@ -697,6 +739,13 @@ export function createWatchService({
 
   function checkPrompt({ watch, brief, events, trigger, checkId, resultRelPath, deep }) {
     const now = new Date();
+    const deepseek = config.deepseekSearch !== false;
+    const searchTool = deepseek ? "deepseek_search" : "anysearch_search";
+    const fetchTool = deepseek ? "deepseek_fetch" : "web_fetch";
+    const aliases = Array.isArray(brief?.target?.aliases) ? brief.target.aliases : [];
+    const primaryTerms = (aliases.length ? aliases : [brief?.target?.company || ""])
+      .filter((item) => item && !/^\d{6}(\.\w+)?$/i.test(item))
+      .join(" ") || brief?.target?.security || "";
     return `# 「盯」· 只读估值巡检
 
 你不是在重写报告，而是在判断：**新信息有没有让当前估值失效**。这是一次只读检查。
@@ -716,8 +765,10 @@ ${eventsText(events)}
 ## 工作顺序
 1. 用 read 读报告和 \`${brief.target.statePath}\`，确认上面的 brief 与当前版本一致；不一致时以状态文件为准，并在结果里注明。
 2. ${deep
-    ? "主动取证：用 westock_query 查最新行情、公告、财报（例如 quote / notice list / finance）；用 anysearch_search 搜最近 24–48 小时的新闻；必要时用 web_fetch 打开原文。"
-    : "逐条核对候选：用 web_fetch 打开原文；用 westock_query 查公告/财报/行情做交叉验证。不要只看标题。westock 子命令用 `notice list <symbol>`（公告）、`news <symbol>`（新闻）、`quote <symbol>`（行情）、`finance <symbol>`（财报），不要猜 announce/公告 这类子命令。westock 公告列表没有 URL 时，用 anysearch_search 搜公告标题，找到原文或可信转载链接。"}
+    ? deepseek
+      ? `主动取证：用 westock_query 查最新行情、公告、财报（例如 quote / notice list / finance）；用 deepseek_search 搜最近 24–48 小时的新闻，Bloomberg / Reuters 是主来源，优先搜 \`site:bloomberg.com OR site:reuters.com ${primaryTerms} after:${brief.target.dataCutoff || "2026-01-01"}\`；用 deepseek_fetch 打开原文（Reuters 用搜索结果里的链接），抓不到再退回 web_fetch。`
+      : `主动取证：用 westock_query 查最新行情、公告、财报（例如 quote / notice list / finance）；用 anysearch_search 搜最近 24–48 小时的新闻，其中 Bloomberg / Reuters 是主来源，优先用 \`site:bloomberg.com OR site:reuters.com ${primaryTerms}\` 搜一次；必要时用 web_fetch 打开原文。`
+    : `逐条核对候选：用 ${fetchTool} 打开原文${deepseek ? "（Reuters 用搜索结果里的链接；Bloomberg 付费墙可能只返回导语）" : ""}；用 westock_query 查公告/财报/行情做交叉验证。不要只看标题。westock 子命令用 \`notice list <symbol>\`（公告）、\`news <symbol>\`（新闻）、\`quote <symbol>\`（行情）、\`finance <symbol>\`（财报），不要猜 announce/公告 这类子命令。westock 公告列表没有 URL 时，用 ${searchTool} 搜公告标题，找到原文或可信转载链接。候选来自 Bloomberg / Reuters（主来源）时优先核对；这两家常有反爬或付费墙，打不开就用搜索摘要 + westock 或另一个独立来源交叉验证，不要编造正文。`}
 3. **先做“新旧”判定**：候选发布日期是否晚于 \`${brief.target.dataCutoff || "信息截止日"}\`？报告、状态文件和已有证据里是否已经引用过同一来源、同一数字、同一结论？如果只是同一事实的重复报道/转载，或框架已经纳入过的卖方观点，**不算新信息**。
 4. 判断它是否**直接改变 top 敏感性输入的取值/区间**，或**触发/接近某条失效条件**，或**推翻某条观点**。
 5. 只有同时满足以下条件才 output \`material: true\`：
@@ -726,6 +777,7 @@ ${eventsText(events)}
    - 与敏感性变量或失效条件有明确对应关系；
    - 能给出量化影响（目标价/估值 from → to 或 % 变化）；至少能说明方向与量级；
    - 至少一个可点击链接，且必须是原文页；券商首页、搜索页、https://www.sse.com.cn/ 这类占位链接不算。
+   - **原文只拿到导语/摘要时，不能判 material=true**：Bloomberg 付费墙常只返回导语，Reuters 链接也可能抓取失败；必须有 westock 数据或另一个独立来源互证，只有摘要就降为 material=false，并写进 checked。
    - **卖方重申目标价、且没有新增盈利/行业数据**，不算重大；只有新的财务披露、监管事件、产能/价格数据，或对 S/F 输入的实质改变才算。
 6. 不满足就 \`material: false\`。**不要为了汇报而汇报**；没有重大变化是常态。
 

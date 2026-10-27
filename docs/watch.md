@@ -45,7 +45,7 @@
 
 `lib/watch/brief.mjs` 从 `analysis-state.json` 投影出盯盘关注点，报告/模型只提供身份和版本：
 
-- 目标：公司、证券、估值日、信息截止、报告路径/版本、状态文件、模型路径/版本。
+- 目标：公司、英文/中文别名（用于 Bloomberg / Reuters 检索）、证券、估值日、信息截止、报告路径/版本、状态文件、模型路径/版本。
 - 基准/上行/下行估值（V1/V2/V3）。
 - **Top 3 敏感性**：按影响百分比排序，带 driver（如 `毛利率`）、扰动、结果、关联观点。
 - 失效条件（F1–F8）：指标、阈值、预警、来源、频率、状态、上次观察。
@@ -59,7 +59,10 @@
   └─ 到扫描时间？
        ├─ westock notice list <symbol>   （tier 1）
        ├─ westock news <symbol>          （tier 3）
-       ├─ anysearch_search <query>       （tier 3）
+       ├─ deepseek_search site:bloomberg.com OR site:reuters.com <英文别名> after:<截止日>
+       │                                  （主来源 tier 2，域名过滤）
+       ├─ anysearch_search site:...       （仅当 DeepSeek 无结果/不可用时兜底）
+       ├─ anysearch_search <query>       （tier 3，国内/通用召回）
        └─ 解析 → 去重 → 打分 → watch_events(new)
   └─ 有 new 候选 或 到深度复核时间？
        └─ LLM 研判（只读 session，写入 .watch/<watchId>/<checkId>.json）
@@ -68,9 +71,22 @@
 ```
 
 - **规则扫描不调 LLM**：只做抓取、解析、去重、排序。
+- **主来源优先**：DeepSeek Search 的 site 限定搜索排在最前，结果只保留 Bloomberg / Reuters 两个域名，按 S2 计分并加 5 分排序权重（高于一般网页、低于 S1 公告）；`rerank_score` 再折算 0–6 分参与排序。
+- **AnySearch 兜底**：DeepSeek 未配置、报错或过滤后 0 条时，才跑 AnySearch 主来源任务；命中就不重复调用。通用 AnySearch 查询照常保留国内召回。
 - **LLM 只在有候选时跑**：节省 token；失败后 5 分钟内不重试，候选保留。
-- **每日深度复核**：即使没有候选也跑一次，主动拉行情/公告/财报 + 最近 24–48 小时新闻。
+- **每日深度复核**：即使没有候选也跑一次，主动拉行情/公告/财报 + 最近 24–48 小时新闻（含两家主来源）。
 - **单飞**：同一个 watch 同时最多一个检查；检查 5 分钟超时。
+
+## 主来源：Bloomberg / Reuters
+
+- 检索词由 `buildPrimaryWebQuery()` 生成：`site:bloomberg.com OR site:reuters.com CXMT`。优先用 `analysis-state.json` 公司名括号里的英文别名（如 `长鑫科技（原长鑫存储，CXMT，688825.SH）` → `CXMT`）；没有英文别名时退回中文公司名。
+- **DeepSeek Search 是首选**：`site:` 是严格约束，结果带结构化 `date` / `authority` / `rerank_score` / `summary`；扫描时自动追加 `after:<上次扫描日或 dataCutoff>`，把旧闻挡在门外。
+- **AnySearch 只在兜底时用**：它的 `site:` 只是弱约束，会混入 facebook / x / tradingview 等转载；结果在 `candidatesFromAnySearch()` 里再做域名过滤。
+- 两个来源都按 `bloomberg.com` / `reuters.com`（含子域名）做**域名过滤**，同一篇报道同时出现在主来源和转载站时，合并为一条并保留主来源链接。
+- 两家按 **S2（主流财经媒体）** 计分；通用搜索里命中的这两家也会自动升到 S2。
+- 日期统一写成 `YYYY-MM-DD`：DeepSeek 的 ISO 时间按服务器本地时区取日期；AnySearch 的 `date:` 文本也会归一化，供“新旧判定”使用。
+- 主来源每轮一次查询、最多取 8 条（一次覆盖两家）；AnySearch 的“摘要块 + 正文块”会被合并，避免同一结果出现两次。
+- 研判阶段的 `deepseek_fetch` 可以读 Reuters 全文（用搜索返回的链接），Bloomberg 通常只返回导语；两者都读不到时再退回 `web_fetch`。
 
 ## 发现契约
 
@@ -148,15 +164,21 @@ SSE：`watch.updated`、`watch.message`、`watch.deleted`。
 | `WATCH_DEEP_CHECK_TIME` | `18:30` | 每日深度复核（服务器本地时区）；不在界面展示 |
 | `WATCH_MAX_RUNTIME_MS` | `300000` | 单次检查超时 |
 | `WATCH_ASK_TIMEOUT_MS` | `180000` | 单次追问超时 |
+| `DEEPSEEK_SEARCH` | 开（有 Key 时） | `0` 关闭 DeepSeek Search/Fetch，主来源退回 AnySearch |
+| `DEEPSEEK_API_KEY` | 无 | Search/Fetch 与模型共用；没有 Key 时自动关闭 |
+| `DEEPSEEK_API_BASE` | `https://api.deepseek.com` | 仅调试用 |
 
-依赖：`WESTOCK_QUERY`（公告/新闻/行情）、`ANYSEARCH_QUERY`（公开新闻）、`web_fetch`（原文）。任何一个关闭时，规则扫描会降级，但不会伪造数据。
+依赖：`WESTOCK_QUERY`（公告/新闻/行情）、`DEEPSEEK_SEARCH`（Bloomberg / Reuters 主来源，缺失时自动退回）、`ANYSEARCH_QUERY`（兜底 + 国内召回）、`web_fetch`（原文兜底）。任何一个关闭时，规则扫描会降级，但不会伪造数据。
 
 ## 边界与已知限制
 
 - **单进程**：服务不跑，盯盘就停；启动后按 `nextScanAt` 补一次。没有 launchd 常驻。
 - **不是实时行情**：westock 是查询式数据，扫描间隔内不会推送。
-- **公告没有 URL**：westock 公告列表的 `url` 为空，prompt 要求 agent 用 `anysearch_search` 找原文/可信转载；找不到就降为 `material=false`。
-- **成本**：默认 30 分钟一次规则扫描（1 次 westock notice + 1 次 news + 1 次 AnySearch），LLM 只在有候选/深度复核时跑。AnySearch 配额紧张时用 `WATCH_INTERVAL_MINUTES=60`（或 120）重启服务。
+- **公告没有 URL**：westock 公告列表的 `url` 为空，prompt 要求 agent 用 `deepseek_search`（不可用时 `anysearch_search`）找原文/可信转载；找不到就降为 `material=false`。
+- **主来源：能搜，部分能读**：DeepSeek Search 能返回两家标题、摘要、日期和链接；`deepseek_fetch` 能读 Reuters 全文（必须用搜索返回的带 `/<hash>/` 前缀链接，canonical URL 会 404），Bloomberg 通常只返回导语（付费墙）。`web_fetch` 直连两家仍会被 DataDome / 403 拦住。因此 prompt 要求：只拿到导语/摘要时不能判 `material=true`，必须有 westock 数据或另一个独立来源互证。
+- **成本**：默认 30 分钟一次规则扫描（2 次 westock + 1 次 DeepSeek Search + 1 次 AnySearch 通用查询），DeepSeek 失败才多 1 次 AnySearch；LLM 只在有候选/深度复核时跑。DeepSeek Search/Fetch 与模型共用账户余额，注意 QPS 429。
+- **AnySearch 的 site 限定是弱约束**：只在 DeepSeek 兜底时使用，仍靠域名过滤；如果某轮主来源 0 条，通用搜索仍然覆盖国内来源，但不会伪造 Bloomberg/Reuters 命中。
+- **本机 DNS 是 fake-IP**：所有域名解析到 `198.18.0.0/15`（本地代理），`web_fetch` 的 SSRF 防护会把这些地址当内网拒绝；DeepSeek 是服务端抓取，不受影响。需要在代理模式下用 `web_fetch` 时，单独评估放开该网段的风险，不要直接改默认防护。
 - **只读**：发现不会自动改目标价/状态；需要人工在现有跟踪/审批链路处理。
 - **“一切安好”** 只代表最近一次检查没有新增重大信息，不代表框架里没有已触发的失效条件（例如 F5 早已 triggered）；追问时 agent 会区分。
 
@@ -164,6 +186,8 @@ SSE：`watch.updated`、`watch.message`、`watch.deleted`。
 
 ```bash
 npm run test:watch          # brief / finding 契约 / 来源解析 / service 端到端（stub session）
+npm run test:deepseek-tool  # DeepSeek Search/Fetch 工具（mock，不联网）
+npm run test:deepseek-search # 真实 API 冒烟（联网，需要 Key）
 npm run test:monitoring     # 现有监测契约回归
 npm run test:monitoring:store
 ```

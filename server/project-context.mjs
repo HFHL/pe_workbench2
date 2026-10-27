@@ -15,6 +15,7 @@ import { PdfStore } from "../lib/pdf-store.mjs";
 import { createPdfTool } from "../lib/pdf-tool.mjs";
 import { createWestockTool } from "../lib/westock-tool.mjs";
 import { createAnySearchTool } from "../lib/anysearch-tool.mjs";
+import { createDeepSeekFetchTool, createDeepSeekSearchTool } from "../lib/deepseek-search-tool.mjs";
 import { createWebFetchTool } from "../lib/web-fetch-tool.mjs";
 import { AsrService } from "../lib/asr.mjs";
 import { createAsrTool } from "../lib/asr-tool.mjs";
@@ -108,6 +109,12 @@ export function createProjectManager({
     const anySearchTool = config.anysearchQuery
       ? createAnySearchTool({ apiKey: config.anysearchApiKey, apiBase: config.anysearchApiBase })
       : null;
+    const deepSeekSearchTool = config.deepseekSearch
+      ? createDeepSeekSearchTool({ apiKey: config.deepseekApiKey, apiBase: config.deepseekApiBase })
+      : null;
+    const deepSeekFetchTool = config.deepseekSearch
+      ? createDeepSeekFetchTool({ apiKey: config.deepseekApiKey, apiBase: config.deepseekApiBase })
+      : null;
     const webFetchTool = config.webFetch
       ? createWebFetchTool({ allowPrivate: config.webFetchAllowPrivate })
       : null;
@@ -151,7 +158,7 @@ export function createProjectManager({
       previews,
       pdfs,
       asr,
-      tools: [workbookTool, pdfTool, westockTool, anySearchTool, webFetchTool, asrTool, trackingTool].filter(Boolean),
+      tools: [workbookTool, pdfTool, westockTool, anySearchTool, deepSeekSearchTool, deepSeekFetchTool, webFetchTool, asrTool, trackingTool].filter(Boolean),
     };
     ctx.trace = createTraceService({
       store,

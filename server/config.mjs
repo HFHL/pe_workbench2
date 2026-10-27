@@ -41,6 +41,9 @@ export async function loadConfig({ env = process.env, root = REPO_ROOT } = {}) {
   const pdfRead = env.PDF_READ !== "0";
   const westockQuery = env.WESTOCK_QUERY !== "0";
   const anysearchQuery = env.ANYSEARCH_QUERY !== "0";
+  // DeepSeek Search / Fetch share the model API key. Enabled when the key
+  // exists; DEEPSEEK_SEARCH=0 keeps the old AnySearch-only path.
+  const deepseekSearch = env.DEEPSEEK_SEARCH !== "0" && Boolean(env.DEEPSEEK_API_KEY);
   const webFetch = env.WEB_FETCH !== "0";
   const asrEnabled = env.ASR !== "0";
   const toolNames = ["read", "write", "edit", "grep", "find", "ls", "create_tracking"];
@@ -48,6 +51,7 @@ export async function loadConfig({ env = process.env, root = REPO_ROOT } = {}) {
   if (pdfRead) toolNames.push("pdf_read");
   if (westockQuery) toolNames.push("westock_query");
   if (anysearchQuery) toolNames.push("anysearch_search");
+  if (deepseekSearch) toolNames.push("deepseek_search", "deepseek_fetch");
   if (webFetch) toolNames.push("web_fetch");
   if (asrEnabled) toolNames.push("asr_read");
 
@@ -80,6 +84,9 @@ export async function loadConfig({ env = process.env, root = REPO_ROOT } = {}) {
     anysearchQuery,
     anysearchApiKey: env.ANYSEARCH_API_KEY || "",
     anysearchApiBase: env.ANYSEARCH_API_BASE || "https://api.anysearch.com",
+    deepseekSearch,
+    deepseekApiKey: env.DEEPSEEK_API_KEY || "",
+    deepseekApiBase: env.DEEPSEEK_API_BASE || "https://api.deepseek.com",
     webFetch,
     webFetchAllowPrivate: env.WEB_FETCH_ALLOW_PRIVATE === "1",
     asrEnabled,

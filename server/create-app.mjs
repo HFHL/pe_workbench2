@@ -73,6 +73,8 @@ export async function createWorkbench({ config: providedConfig = null, logger = 
   const ANYSEARCH_QUERY = config.anysearchQuery;
   const ANYSEARCH_API_KEY = config.anysearchApiKey;
   const ANYSEARCH_API_BASE = config.anysearchApiBase;
+  const DEEPSEEK_SEARCH = config.deepseekSearch;
+  const DEEPSEEK_API_BASE = config.deepseekApiBase;
   const WEB_FETCH = config.webFetch;
   const WEB_FETCH_ALLOW_PRIVATE = config.webFetchAllowPrivate;
   const SEED_DEMO = config.seedDemo;
@@ -552,6 +554,7 @@ async function handleApi(req, res, url) {
         logger.log?.(
           `anysearch: ${ANYSEARCH_QUERY ? (ANYSEARCH_API_KEY ? "enabled" : "enabled (anonymous)") : "disabled"} · ${ANYSEARCH_API_BASE}`,
         );
+        logger.log?.(`deepseek search/fetch: ${DEEPSEEK_SEARCH ? "enabled" : "disabled"} · ${DEEPSEEK_API_BASE}`);
         logger.log?.(`web_fetch: ${WEB_FETCH ? "enabled" : "disabled"}${WEB_FETCH_ALLOW_PRIVATE ? " (private targets allowed)" : ""}`);
         trackingScheduler.start();
         monitorScheduler.start();
@@ -596,6 +599,8 @@ async function handleApi(req, res, url) {
     ANYSEARCH_QUERY,
     ANYSEARCH_API_KEY,
     ANYSEARCH_API_BASE,
+    DEEPSEEK_SEARCH,
+    DEEPSEEK_API_BASE,
     WEB_FETCH,
     WEB_FETCH_ALLOW_PRIVATE,
     CALC_INFO,

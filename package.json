@@ -17,6 +17,8 @@
     "test:pdf": "node scripts/test-pdf.mjs",
     "test:asr": "node scripts/test-asr.mjs",
     "test:anysearch": "node scripts/test-anysearch.mjs",
+    "test:deepseek-search": "node scripts/test-deepseek-search.mjs",
+    "test:deepseek-tool": "node scripts/test-deepseek-tool.mjs",
     "test:web-fetch": "node scripts/test-web-fetch.mjs",
     "test:trace": "node scripts/test-trace.mjs && node scripts/test-trace-hook.mjs",
     "test:trace:e2e": "python3 scripts/test-trace-e2e.py",
